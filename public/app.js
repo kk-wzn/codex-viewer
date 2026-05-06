@@ -320,7 +320,7 @@ function openEventSource(id) {
   es.addEventListener('entries', event => {
     const entries = JSON.parse(event.data);
     state.events.push(...entries);
-    state.conversation.push(...entries.flatMap(entryToConversationItems));
+    appendConversationItems(entries.flatMap(entryToConversationItems));
     const timelineEntries = entries.map(entry => ({
       timestamp: entry.timestamp || '',
       type: entry.type,
@@ -380,6 +380,18 @@ function previewEvent(event) {
 
 function entryToConversationItems(entry) {
   const payload = entry.payload || {};
+  if (entry.type === 'event_msg' && (payload.type === 'user_message' || payload.type === 'agent_message')) {
+    const text = previewEvent(entry);
+    if (!text || isEnvironmentContext(text)) return [];
+    return [{
+      id: `${state.events.length}-${entry.timestamp || ''}`,
+      timestamp: entry.timestamp || '',
+      kind: 'message',
+      role: payload.type === 'user_message' ? 'user' : 'assistant',
+      phase: payload.phase || '',
+      text,
+    }];
+  }
   if (entry.type !== 'response_item') return [];
   if (payload.type === 'message') {
     const text = previewEvent(entry);
@@ -415,6 +427,19 @@ function entryToConversationItems(entry) {
     }];
   }
   return [];
+}
+
+function appendConversationItems(items) {
+  for (const item of items) {
+    const duplicate = state.conversation.some(existing => {
+      if (existing.kind !== item.kind || existing.role !== item.role || existing.text !== item.text) return false;
+      if (item.kind === 'tool' || item.kind === 'tool-result') {
+        return existing.callId && existing.callId === item.callId;
+      }
+      return true;
+    });
+    if (!duplicate) state.conversation.push(item);
+  }
 }
 
 function formatToolText(text) {

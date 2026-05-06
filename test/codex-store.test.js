@@ -130,3 +130,57 @@ test('falls back to event messages when response messages are absent', () => {
   assert.equal(items[1].role, 'assistant');
   assert.equal(items[1].phase, 'final_answer');
 });
+
+test('keeps non-mirrored event messages when response messages are present', () => {
+  const items = getConversationItems([
+    {
+      timestamp: '2026-05-06T10:00:00.000Z',
+      type: 'response_item',
+      payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'developer instructions' }] },
+    },
+    {
+      timestamp: '2026-05-06T10:00:01.000Z',
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'visible user turn' },
+    },
+    {
+      timestamp: '2026-05-06T10:00:02.000Z',
+      type: 'event_msg',
+      payload: { type: 'agent_message', message: 'visible assistant turn', phase: 'final_answer' },
+    },
+  ]);
+
+  assert.equal(items.length, 3);
+  assert.equal(items[0].role, 'developer');
+  assert.equal(items[1].role, 'user');
+  assert.equal(items[1].text, 'visible user turn');
+  assert.equal(items[2].role, 'assistant');
+});
+
+test('deduplicates event message mirrors of response messages', () => {
+  const items = getConversationItems([
+    {
+      timestamp: '2026-05-06T10:00:00.000Z',
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'same user turn' },
+    },
+    {
+      timestamp: '2026-05-06T10:00:00.100Z',
+      type: 'response_item',
+      payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'same user turn' }] },
+    },
+    {
+      timestamp: '2026-05-06T10:00:01.000Z',
+      type: 'response_item',
+      payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'same assistant turn' }] },
+    },
+    {
+      timestamp: '2026-05-06T10:00:01.100Z',
+      type: 'event_msg',
+      payload: { type: 'agent_message', message: 'same assistant turn', phase: 'final_answer' },
+    },
+  ]);
+
+  assert.equal(items.length, 2);
+  assert.deepEqual(items.map(item => item.text), ['same user turn', 'same assistant turn']);
+});
