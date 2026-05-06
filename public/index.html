@@ -42,12 +42,31 @@
             <div id="insights" class="insights"></div>
 
             <div class="tabs">
-              <button class="tab active" data-tab="timeline">Timeline</button>
+              <button class="tab active" data-tab="conversation">Conversation</button>
+              <button class="tab" data-tab="timeline">Timeline</button>
               <button class="tab" data-tab="last-response">Last Response</button>
               <button class="tab" data-tab="raw">Raw events</button>
             </div>
 
-            <div id="timeline-tab" class="tab-panel"></div>
+            <div id="conversation-tab" class="tab-panel">
+              <div class="conversation-toolbar">
+                <input id="conversation-filter" placeholder="Search conversation..." />
+                <label>
+                  <input id="conversation-tools" type="checkbox" checked />
+                  Tools
+                </label>
+                <label>
+                  <input id="conversation-instructions" type="checkbox" />
+                  Instructions
+                </label>
+                <label>
+                  <input id="conversation-collapse" type="checkbox" checked />
+                  Collapse tools
+                </label>
+              </div>
+              <div id="conversation" class="conversation-list"></div>
+            </div>
+            <div id="timeline-tab" class="tab-panel hidden"></div>
             <div id="last-response-tab" class="tab-panel hidden"></div>
             <div id="raw-tab" class="tab-panel hidden">
               <div class="raw-toolbar">

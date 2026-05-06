@@ -6,8 +6,9 @@ const state = {
   summary: null,
   events: [],
   timeline: [],
+  conversation: [],
   eventSource: null,
-  tab: 'timeline',
+  tab: 'conversation',
 };
 
 const els = {
@@ -22,6 +23,12 @@ const els = {
   live: document.getElementById('live-state'),
   stats: document.getElementById('stats'),
   insights: document.getElementById('insights'),
+  conversation: document.getElementById('conversation'),
+  conversationTab: document.getElementById('conversation-tab'),
+  conversationFilter: document.getElementById('conversation-filter'),
+  conversationTools: document.getElementById('conversation-tools'),
+  conversationInstructions: document.getElementById('conversation-instructions'),
+  conversationCollapse: document.getElementById('conversation-collapse'),
   timeline: document.getElementById('timeline-tab'),
   lastResponseTab: document.getElementById('last-response-tab'),
   raw: document.getElementById('raw-events'),
@@ -99,6 +106,7 @@ async function selectSession(id) {
   state.summary = data.summary;
   state.events = data.events;
   state.timeline = data.summary.timeline || [];
+  state.conversation = data.summary.conversation || [];
   renderDetail();
   openEventSource(id);
 }
@@ -130,6 +138,7 @@ function renderDetail() {
   `).join('');
 
   renderInsights();
+  renderConversation();
   renderTimeline();
   renderLastResponse();
   renderRaw();
@@ -148,7 +157,7 @@ function isNearDetailBottom() {
 }
 
 function scrollDetailToBottom() {
-  if (state.tab === 'timeline') {
+  if (state.tab === 'timeline' || state.tab === 'conversation') {
     els.detail.scrollTop = els.detail.scrollHeight;
   }
 }
@@ -200,6 +209,57 @@ function renderInsights() {
   `;
 
   els.insights.innerHTML = [goalHtml, usageHtml, toolHtml, roleHtml].filter(Boolean).join('');
+}
+
+function renderConversation() {
+  const filter = els.conversationFilter.value.trim().toLowerCase();
+  const showTools = els.conversationTools.checked;
+  const showInstructions = els.conversationInstructions.checked;
+  const collapseTools = els.conversationCollapse.checked;
+  const items = state.conversation.filter(item => {
+    if (!showTools && (item.kind === 'tool' || item.kind === 'tool-result')) return false;
+    if (!showInstructions && (item.role === 'system' || item.role === 'developer')) return false;
+    if (!filter) return true;
+    return [
+      item.role,
+      item.kind,
+      item.toolName,
+      item.callId,
+      item.text,
+    ].filter(Boolean).join('\n').toLowerCase().includes(filter);
+  });
+
+  if (items.length === 0) {
+    els.conversation.innerHTML = '<div class="empty">No conversation items match this view.</div>';
+    return;
+  }
+
+  els.conversation.innerHTML = items.map(item => {
+    if (item.kind === 'tool' || item.kind === 'tool-result') {
+      const title = item.kind === 'tool'
+        ? `${item.toolName || 'tool'} ${item.callId || ''}`.trim()
+        : `result ${item.callId || ''}`.trim();
+      return `
+        <details class="bubble ${escapeHtml(item.kind)}" ${collapseTools ? '' : 'open'}>
+          <summary class="tool-summary">
+            <span>${escapeHtml(title)}</span>
+            <span>${escapeHtml(fmtDate(item.timestamp))}</span>
+          </summary>
+          <pre class="tool-body">${escapeHtml(formatToolText(item.text))}</pre>
+        </details>
+      `;
+    }
+
+    return `
+      <article class="bubble ${escapeHtml(item.role)}">
+        <div class="bubble-meta">
+          <span>${escapeHtml(item.role)}${item.phase ? ` / ${escapeHtml(item.phase)}` : ''}</span>
+          <span>${escapeHtml(fmtDate(item.timestamp))}</span>
+        </div>
+        <div class="bubble-text">${escapeHtml(item.text || '')}</div>
+      </article>
+    `;
+  }).join('');
 }
 
 function renderTimeline() {
@@ -260,6 +320,7 @@ function openEventSource(id) {
   es.addEventListener('entries', event => {
     const entries = JSON.parse(event.data);
     state.events.push(...entries);
+    state.conversation.push(...entries.flatMap(entryToConversationItems));
     const timelineEntries = entries.map(entry => ({
       timestamp: entry.timestamp || '',
       type: entry.type,
@@ -317,6 +378,58 @@ function previewEvent(event) {
   return '';
 }
 
+function entryToConversationItems(entry) {
+  const payload = entry.payload || {};
+  if (entry.type !== 'response_item') return [];
+  if (payload.type === 'message') {
+    const text = previewEvent(entry);
+    if (!text || isEnvironmentContext(text)) return [];
+    return [{
+      id: `${state.events.length}-${entry.timestamp || ''}`,
+      timestamp: entry.timestamp || '',
+      kind: 'message',
+      role: payload.role || 'message',
+      phase: payload.phase || '',
+      text,
+    }];
+  }
+  if (payload.type === 'function_call') {
+    return [{
+      id: `${state.events.length}-${payload.call_id || entry.timestamp || ''}`,
+      timestamp: entry.timestamp || '',
+      kind: 'tool',
+      role: 'tool',
+      toolName: payload.name || 'unknown',
+      callId: payload.call_id || '',
+      text: payload.arguments || '',
+    }];
+  }
+  if (payload.type === 'function_call_output') {
+    return [{
+      id: `${state.events.length}-${payload.call_id || entry.timestamp || ''}`,
+      timestamp: entry.timestamp || '',
+      kind: 'tool-result',
+      role: 'tool-result',
+      callId: payload.call_id || '',
+      text: payload.output || '',
+    }];
+  }
+  return [];
+}
+
+function formatToolText(text) {
+  if (typeof text !== 'string') return String(text ?? '');
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+function isEnvironmentContext(text) {
+  return typeof text === 'string' && text.trim().startsWith('<environment_context>');
+}
+
 function textContent(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -329,12 +442,17 @@ els.sessions.addEventListener('click', event => {
 });
 
 els.refresh.addEventListener('click', () => loadSessions().catch(showError));
+els.conversationFilter.addEventListener('input', renderConversation);
+els.conversationTools.addEventListener('change', renderConversation);
+els.conversationInstructions.addEventListener('change', renderConversation);
+els.conversationCollapse.addEventListener('change', renderConversation);
 els.rawFilter.addEventListener('input', renderRaw);
 
 document.querySelectorAll('.tab').forEach(button => {
   button.addEventListener('click', () => {
     state.tab = button.dataset.tab;
     document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab === button));
+    els.conversationTab.classList.toggle('hidden', state.tab !== 'conversation');
     els.timelineTab.classList.toggle('hidden', state.tab !== 'timeline');
     els.lastResponseTab.classList.toggle('hidden', state.tab !== 'last-response');
     els.rawTab.classList.toggle('hidden', state.tab !== 'raw');
