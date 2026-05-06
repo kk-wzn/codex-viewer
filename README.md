@@ -2,6 +2,8 @@
 
 Codex Viewer is a small local web viewer for Codex session data, inspired by `cc-viewer`.
 
+English | [简体中文](./docs/README.zh.md)
+
 It reads Codex's local state instead of intercepting API traffic:
 
 - `~/.codex/state_5.sqlite` for the session list and metadata
