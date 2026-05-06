@@ -300,10 +300,19 @@ h2 {
   line-height: 1.45;
 }
 
+.conversation-toolbar,
 .raw-toolbar {
   margin-bottom: 10px;
 }
 
+.conversation-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+#conversation-filter,
 .raw-toolbar input {
   width: 100%;
   background: #10100f;
@@ -311,6 +320,94 @@ h2 {
   border: 1px solid #34342e;
   border-radius: 6px;
   padding: 8px 10px;
+}
+
+#conversation-filter {
+  flex: 1 1 260px;
+  min-width: 180px;
+}
+
+.conversation-toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #d8d2c2;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.conversation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bubble {
+  max-width: min(860px, 92%);
+  border: 1px solid #34342e;
+  border-radius: 8px;
+  background: #171714;
+  overflow: hidden;
+}
+
+.bubble.user {
+  align-self: flex-end;
+  background: #2a2519;
+  border-color: #5f5130;
+}
+
+.bubble.assistant,
+.bubble.message {
+  align-self: flex-start;
+  background: #1a1a17;
+}
+
+.bubble.tool,
+.bubble.tool-result {
+  max-width: 100%;
+  align-self: stretch;
+  background: #111510;
+  border-color: #32402f;
+}
+
+.bubble-meta,
+.tool-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #a8a293;
+  font-size: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #34342e;
+}
+
+.bubble-meta span:first-child,
+.tool-summary span:first-child {
+  color: #d19a3a;
+  font-weight: 650;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-summary {
+  cursor: pointer;
+}
+
+.bubble-text {
+  padding: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.tool-body {
+  border: 0;
+  border-radius: 0;
+  border-top: 1px solid #34342e;
+  background: #090907;
 }
 
 pre {
@@ -347,5 +444,21 @@ pre {
 
   .insights {
     grid-template-columns: 1fr;
+  }
+
+  .tabs {
+    flex-wrap: wrap;
+  }
+
+  .conversation-toolbar {
+    align-items: flex-start;
+  }
+
+  #conversation-filter {
+    flex-basis: 100%;
+  }
+
+  .bubble {
+    max-width: 100%;
   }
 }
