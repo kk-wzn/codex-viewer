@@ -157,6 +157,49 @@ test('keeps non-mirrored event messages when response messages are present', () 
   assert.equal(items[2].role, 'assistant');
 });
 
+test('parses custom_tool_call (apply_patch) into conversation tool items', () => {
+  const events = [
+    {
+      timestamp: '2026-05-06T10:00:00.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'custom_tool_call',
+        name: 'apply_patch',
+        call_id: 'call-patch-1',
+        input: '*** Begin Patch\n*** Update File: README.md\n@@\n-old\n+new\n*** End Patch',
+      },
+    },
+    {
+      timestamp: '2026-05-06T10:00:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'custom_tool_call_output',
+        call_id: 'call-patch-1',
+        output: 'Done!',
+      },
+    },
+  ];
+
+  const items = getConversationItems(events);
+  assert.equal(items.length, 2);
+  assert.equal(items[0].kind, 'tool');
+  assert.equal(items[0].toolName, 'apply_patch');
+  assert.equal(items[0].callId, 'call-patch-1');
+  assert.ok(items[0].text.startsWith('*** Begin Patch'));
+  assert.equal(items[0].custom, true);
+  assert.equal(items[1].kind, 'tool-result');
+  assert.equal(items[1].text, 'Done!');
+  assert.equal(items[1].custom, true);
+
+  const summary = getSessionSummary(events);
+  assert.equal(summary.toolCounts.apply_patch, 1);
+  assert.equal(summary.roleCounts.tool, 1);
+  assert.equal(summary.roleCounts['tool-result'], 1);
+  const callTimelineEntry = summary.timeline.find(t => t.role === 'tool');
+  assert.ok(callTimelineEntry.preview.startsWith('*** Begin Patch'),
+    `expected timeline preview to surface custom tool input, got: ${callTimelineEntry.preview}`);
+});
+
 test('deduplicates event message mirrors of response messages', () => {
   const items = getConversationItems([
     {
