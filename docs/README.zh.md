@@ -2,7 +2,7 @@
 
 Codex Viewer 是一个用于查看 Codex 会话数据的本地 Web 工具，灵感来自 `cc-viewer`。
 
-[English](../README.md) | 简体中文
+[English](../README.md) | 简体中文 | [繁體中文](./README.zh-TW.md)
 
 它直接读取 Codex 的本地状态，而不是拦截 API 流量：
 
