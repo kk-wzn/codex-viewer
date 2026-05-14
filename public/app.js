@@ -33,6 +33,7 @@ const els = {
   lastResponseTab: document.getElementById('last-response-tab'),
   raw: document.getElementById('raw-events'),
   rawFilter: document.getElementById('raw-filter'),
+  rawSummary: document.getElementById('raw-summary'),
   rawTab: document.getElementById('raw-tab'),
   timelineTab: document.getElementById('timeline-tab'),
 };
@@ -890,10 +891,186 @@ function renderLastResponse() {
 
 function renderRaw() {
   const filter = els.rawFilter.value.trim().toLowerCase();
+  const rawEvents = state.events.map((event, index) => {
+    const role = rawEventRole(event);
+    const sender = rawEventSender(event, role);
+    const label = rawEventLabel(event);
+    const preview = rawEventPreview(event);
+    const search = [
+      String(index + 1),
+      event.timestamp,
+      event.type,
+      role,
+      sender.id,
+      sender.label,
+      label,
+      preview,
+      JSON.stringify(event),
+    ].filter(Boolean).join('\n').toLowerCase();
+    return { event, index, role, sender, label, preview, search };
+  });
   const events = filter
-    ? state.events.filter(event => JSON.stringify(event).toLowerCase().includes(filter))
-    : state.events;
-  els.raw.textContent = events.map(event => JSON.stringify(event, null, 2)).join('\n\n');
+    ? rawEvents.filter(item => item.search.includes(filter))
+    : rawEvents;
+
+  els.rawSummary.innerHTML = renderRawSummary(events, rawEvents.length, filter);
+  if (events.length === 0) {
+    els.raw.innerHTML = '<div class="empty">No raw events match this filter.</div>';
+    return;
+  }
+
+  const autoOpen = events.length <= 3;
+  els.raw.innerHTML = events.map(item => renderRawEvent(item, autoOpen)).join('');
+}
+
+function renderRawSummary(events, total, filter) {
+  const counts = new Map();
+  const senderCounts = new Map();
+  for (const item of events) {
+    const type = item.event.type || 'event';
+    counts.set(type, (counts.get(type) || 0) + 1);
+    const current = senderCounts.get(item.sender.id) || { label: item.sender.label, count: 0 };
+    current.count += 1;
+    senderCounts.set(item.sender.id, current);
+  }
+  const senderChips = [...senderCounts.entries()]
+    .sort((a, b) => b[1].count - a[1].count || a[1].label.localeCompare(b[1].label))
+    .map(([id, item]) => `<span class="raw-sender-summary raw-sender-${escapeHtml(safeClass(id))}">${escapeHtml(item.label)} ${escapeHtml(item.count)}</span>`)
+    .join('');
+  const typeChips = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 6)
+    .map(([type, count]) => `<span>${escapeHtml(type)} ${escapeHtml(count)}</span>`)
+    .join('');
+  return `
+    <div class="raw-summary-count">
+      Showing <strong>${escapeHtml(formatNumber(events.length))}</strong> of <strong>${escapeHtml(formatNumber(total))}</strong> events
+      ${filter ? `<span class="muted">matching "${escapeHtml(filter)}"</span>` : ''}
+    </div>
+    <div class="raw-summary-groups">
+      ${senderChips ? `<div class="raw-summary-senders">${senderChips}</div>` : ''}
+      ${typeChips ? `<div class="raw-summary-types">${typeChips}</div>` : ''}
+    </div>
+  `;
+}
+
+function renderRawEvent(item, open) {
+  const { event, index, role, sender, label, preview } = item;
+  const timestamp = fmtDate(event.timestamp) || event.timestamp || '';
+  const json = JSON.stringify(event, null, 2);
+  const senderClass = safeClass(sender.id);
+  return `
+    <details class="raw-event raw-sender-${senderClass}" ${open ? 'open' : ''}>
+      <summary class="raw-event-head">
+        <span class="raw-event-main">
+          <span class="raw-index">#${escapeHtml(index + 1)}</span>
+          <span class="raw-event-tags">
+            <span class="raw-sender">${escapeHtml(sender.label)}</span>
+            <span class="raw-event-type">${escapeHtml(event.type || 'event')}</span>
+            ${label ? `<span class="raw-chip">${escapeHtml(label)}</span>` : ''}
+          </span>
+          <span class="raw-event-preview">${escapeHtml(preview || '(no preview)')}</span>
+        </span>
+        <span class="raw-event-time">${escapeHtml(timestamp)}</span>
+      </summary>
+      <div class="raw-event-detail">
+        ${renderRawMeta(event, role)}
+        <pre class="code json raw-json">${highlightJson(json)}</pre>
+      </div>
+    </details>
+  `;
+}
+
+function renderRawMeta(event, role) {
+  const payload = event.payload || {};
+  const sender = rawEventSender(event, role);
+  const rows = [
+    ['timestamp', fmtDate(event.timestamp) || event.timestamp],
+    ['sender', sender.label],
+    ['event', event.type],
+    ['role', role],
+    ['payload', payload.type],
+    ['phase', payload.phase],
+    ['tool', payload.name],
+    ['call id', payload.call_id],
+  ].filter(([, value]) => value);
+
+  if (rows.length === 0) return '';
+  return `<dl class="raw-meta">
+    ${rows.map(([key, value]) => `
+      <div>
+        <dt>${escapeHtml(key)}</dt>
+        <dd>${escapeHtml(value)}</dd>
+      </div>
+    `).join('')}
+  </dl>`;
+}
+
+function rawEventRole(event) {
+  const payload = event.payload || {};
+  if (event.type === 'response_item') {
+    if (payload.type === 'message') return payload.role || 'message';
+    if (payload.type === 'function_call' || payload.type === 'custom_tool_call') return 'tool';
+    if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') return 'tool-result';
+    return payload.type || 'response';
+  }
+  if (event.type === 'event_msg') return payload.type || 'event';
+  return event.type || 'event';
+}
+
+function rawEventSender(event, role) {
+  const payload = event.payload || {};
+  const normalized = String(role || payload.role || payload.type || event.type || '').toLowerCase();
+
+  if (payload.role === 'user' || payload.type === 'user_message' || normalized === 'user') {
+    return { id: 'user', label: 'User' };
+  }
+  if (payload.role === 'assistant' || payload.type === 'agent_message' || normalized === 'assistant' || normalized === 'agent_message') {
+    return { id: 'assistant', label: 'Assistant' };
+  }
+  if (payload.role === 'developer' || payload.type === 'developer_message' || normalized === 'developer' || normalized === 'developer_message') {
+    return { id: 'developer', label: 'Developer' };
+  }
+  if (payload.role === 'system' || payload.type === 'system_message' || normalized === 'system' || normalized === 'system_message') {
+    return { id: 'system', label: 'System' };
+  }
+  if (normalized === 'tool' || payload.type === 'function_call' || payload.type === 'custom_tool_call') {
+    return { id: 'tool', label: 'Tool' };
+  }
+  if (normalized === 'tool-result' || payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
+    return { id: 'tool-result', label: 'Tool result' };
+  }
+  if (event.type === 'response_item') {
+    return { id: 'response', label: 'Response' };
+  }
+  return { id: 'event', label: 'Event' };
+}
+
+function rawEventLabel(event) {
+  const payload = event.payload || {};
+  if (payload.name) return payload.name;
+  if (payload.phase) return payload.phase;
+  if (payload.type) return payload.type;
+  if (payload.role) return payload.role;
+  return '';
+}
+
+function rawEventPreview(event) {
+  const preview = previewEvent(event);
+  if (preview) return compactText(preview, 260);
+  const payload = event.payload || {};
+  const fallback = Object.keys(payload).length ? JSON.stringify(payload) : JSON.stringify(event);
+  return compactText(fallback, 260);
+}
+
+function compactText(text, limit) {
+  const compact = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (compact.length <= limit) return compact;
+  return `${compact.slice(0, limit - 1)}…`;
+}
+
+function safeClass(value) {
+  return String(value || 'event').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
 }
 
 function closeEventSource() {

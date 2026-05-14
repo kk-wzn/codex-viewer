@@ -45,7 +45,7 @@ CODEX_HOME=/path/to/.codex CODEX_VIEWER_PORT=7088 npm start
 - 工具使用與角色分佈的彙總資訊
 - 從最終回覆事件中擷取「最近一次回覆」
 - 解析後的時間軸
-- 原始 rollout JSON 事件
+- 可讀性更強的原始 rollout JSON 事件，支援過濾、依傳送者/來源標示、事件類型彙總，以及展開檢視格式化 payload
 - 所選 rollout 檔案支援即時追加更新
 - 當畫面已捲動到底部時支援黏性即時捲動
 

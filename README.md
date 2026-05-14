@@ -45,7 +45,7 @@ This first version focuses on Codex-native viewing:
 - tool usage and role distribution summaries
 - "Last Response" extraction from final-answer events
 - parsed timeline
-- raw rollout JSON events
+- readable raw rollout JSON events with filtering, per-sender/source badges, event-type summaries, and expandable formatted payloads
 - live append updates for the selected rollout file
 - sticky live scrolling when the viewer is already at the bottom
 
