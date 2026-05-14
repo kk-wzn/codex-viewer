@@ -34,6 +34,14 @@ http://127.0.0.1:7088
 CODEX_HOME=/path/to/.codex CODEX_VIEWER_PORT=7088 npm start
 ```
 
+查看目前版本：
+
+```bash
+codex-viewer --version
+```
+
+版本變更記錄保存在 [`history.md`](../history.md)。版本號來自 `package.json`，並會顯示於 CLI、`/api/health` 與 Web 頂部。
+
 ## 功能範圍
 
 第一個版本聚焦於 Codex 原生資料的檢視：
@@ -45,7 +53,7 @@ CODEX_HOME=/path/to/.codex CODEX_VIEWER_PORT=7088 npm start
 - 工具使用與角色分佈的彙總資訊
 - 從最終回覆事件中擷取「最近一次回覆」
 - 解析後的時間軸
-- 原始 rollout JSON 事件
+- 可讀性更強的原始 rollout JSON 事件，支援過濾、依傳送者/來源標示、事件類型彙總，以及展開檢視格式化 payload
 - 所選 rollout 檔案支援即時追加更新
 - 當畫面已捲動到底部時支援黏性即時捲動
 

@@ -15,6 +15,8 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PORT = 7088;
 const DEFAULT_HOST = '127.0.0.1';
+const PACKAGE = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf-8'));
+export const VERSION = PACKAGE.version;
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -60,7 +62,7 @@ async function handleRequest(req, res, options) {
   const pathname = parsed.pathname;
 
   if (pathname === '/api/health') {
-    sendJson(res, 200, { ok: true, codexHome: options.codexHome });
+    sendJson(res, 200, { ok: true, codexHome: options.codexHome, version: VERSION });
     return;
   }
 
@@ -153,6 +155,7 @@ export async function startServer({ port = DEFAULT_PORT, host = DEFAULT_HOST, co
         host,
         port: actualPort,
         codexHome: resolvedCodexHome,
+        version: VERSION,
         close: () => new Promise(resolve => server.close(resolve)),
       };
     } catch (err) {
@@ -168,5 +171,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const host = process.env.CODEX_VIEWER_HOST || DEFAULT_HOST;
   const codexHome = process.env.CODEX_HOME;
   const started = await startServer({ port, host, codexHome });
-  console.log(`Codex Viewer listening at http://${started.host}:${started.port}`);
+  console.log(`Codex Viewer v${started.version} listening at http://${started.host}:${started.port}`);
 }

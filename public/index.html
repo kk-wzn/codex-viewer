@@ -10,7 +10,10 @@
     <div id="app">
       <header class="topbar">
         <div>
-          <h1>Codex Viewer</h1>
+          <div class="brand-line">
+            <h1>Codex Viewer</h1>
+            <span id="app-version" class="version-badge">v0.1.0</span>
+          </div>
           <p id="codex-home">Loading Codex data...</p>
         </div>
         <div class="actions">
@@ -71,8 +74,9 @@
             <div id="raw-tab" class="tab-panel hidden">
               <div class="raw-toolbar">
                 <input id="raw-filter" placeholder="Filter raw JSON..." />
+                <div id="raw-summary" class="raw-summary"></div>
               </div>
-              <pre id="raw-events"></pre>
+              <div id="raw-events" class="raw-events"></div>
             </div>
           </div>
         </section>
