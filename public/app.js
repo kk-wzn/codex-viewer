@@ -13,6 +13,7 @@ const state = {
 
 const els = {
   codexHome: document.getElementById('codex-home'),
+  version: document.getElementById('app-version'),
   refresh: document.getElementById('refresh-button'),
   count: document.getElementById('session-count'),
   sessions: document.getElementById('sessions'),
@@ -67,6 +68,7 @@ async function fetchJson(url) {
 async function loadHealth() {
   const data = await fetchJson('/api/health');
   els.codexHome.textContent = data.codexHome;
+  if (data.version) els.version.textContent = `v${data.version}`;
 }
 
 async function loadSessions() {

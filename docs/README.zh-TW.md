@@ -34,6 +34,14 @@ http://127.0.0.1:7088
 CODEX_HOME=/path/to/.codex CODEX_VIEWER_PORT=7088 npm start
 ```
 
+查看目前版本：
+
+```bash
+codex-viewer --version
+```
+
+版本變更記錄保存在 [`history.md`](../history.md)。版本號來自 `package.json`，並會顯示於 CLI、`/api/health` 與 Web 頂部。
+
 ## 功能範圍
 
 第一個版本聚焦於 Codex 原生資料的檢視：

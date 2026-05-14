@@ -34,6 +34,14 @@ Optional environment variables:
 CODEX_HOME=/path/to/.codex CODEX_VIEWER_PORT=7088 npm start
 ```
 
+Show the current version:
+
+```bash
+codex-viewer --version
+```
+
+Release notes are tracked in [`history.md`](./history.md). The version number comes from `package.json` and is shown in the CLI, `/api/health`, and the web header.
+
 ## Scope
 
 This first version focuses on Codex-native viewing:
