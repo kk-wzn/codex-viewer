@@ -51,12 +51,15 @@ This first version focuses on Codex-native viewing:
 - active thread goal metadata when available
 - token usage and rate-limit snapshots from rollout events
 - tool usage and role distribution summaries
-- "Last Response" extraction from final-answer events
-- parsed timeline
+- conversation search with highlighted matches
+- tool-call summaries with exit code, duration, output-line count, and failure highlighting
+- "Last Response" extraction from final-answer events with copy and jump-to-conversation actions
+- parsed timeline with date grouping and key-node badges for prompts, final answers, shell commands, patches, tool errors, and git pushes
 - readable raw rollout JSON events with structured filters such as `sender:tool`, `type:response_item`, `tool:exec_command`, and `call_id:...`
-- clickable raw-event sender/type chips, progressive rendering for long raw streams, and expandable formatted payloads
+- clickable raw-event sender/type chips, copy actions, progressive rendering for long raw streams, and expandable formatted payloads
 - session search by title, path, model, branch, source, and timestamp
 - sticky view tabs with per-tab scroll restoration
+- manual refresh that reloads the selected session detail and latest token usage
 - live append updates for the selected rollout file
 - sticky live scrolling when the viewer is already at the bottom
 

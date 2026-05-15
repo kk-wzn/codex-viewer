@@ -76,12 +76,16 @@ async function loadHealth() {
   if (data.version) els.version.textContent = `v${data.version}`;
 }
 
-async function loadSessions() {
+async function loadSessions({ refreshSelected = false } = {}) {
   const data = await fetchJson('/api/sessions?limit=200');
   state.sessions = data.sessions || [];
   renderSessions();
-  if (!state.selectedId && state.sessions.length > 0) {
-    selectSession(state.sessions[0].id);
+
+  const selectedExists = state.selectedId && state.sessions.some(session => session.id === state.selectedId);
+  if (refreshSelected && selectedExists) {
+    await loadSelectedSession(state.selectedId, { resetView: false });
+  } else if (!state.selectedId && state.sessions.length > 0) {
+    await selectSession(state.sessions[0].id);
   }
 }
 
@@ -129,9 +133,15 @@ function sessionSearchText(session) {
 }
 
 async function selectSession(id) {
+  await loadSelectedSession(id, { resetView: true });
+}
+
+async function loadSelectedSession(id, { resetView }) {
   state.selectedId = id;
-  state.rawLimit = RAW_PAGE_SIZE;
-  state.tabScroll = {};
+  if (resetView) {
+    state.rawLimit = RAW_PAGE_SIZE;
+    state.tabScroll = {};
+  }
   renderSessions();
   closeEventSource();
   els.live.textContent = 'loading';
@@ -162,10 +172,12 @@ function renderDetail() {
     session.rolloutPath,
   ].filter(Boolean).join(' | ');
 
+  const latestUsage = latestTokenUsage(summary);
+  const tokenCount = latestUsage?.total_tokens ?? session.tokensUsed ?? 0;
   els.stats.innerHTML = [
     ['Events', summary.eventCount],
     ['Timeline', state.timeline.length],
-    ['Tokens', formatNumber(session.tokensUsed || 0)],
+    ['Tokens', formatNumber(tokenCount)],
     ['Model', session.model || session.modelProvider || ''],
   ].map(([label, value]) => `
     <div class="stat">
@@ -187,6 +199,10 @@ function formatNumber(value) {
   return String(value ?? '');
 }
 
+function latestTokenUsage(summary) {
+  return summary?.latestTokenInfo?.total_token_usage || summary?.latestTokenInfo?.last_token_usage || null;
+}
+
 function isNearDetailBottom() {
   if (els.detail.classList.contains('hidden')) return true;
   const remaining = els.detail.scrollHeight - els.detail.scrollTop - els.detail.clientHeight;
@@ -202,7 +218,7 @@ function scrollDetailToBottom() {
 function renderInsights() {
   const summary = state.summary;
   const goal = state.goal;
-  const latestUsage = summary.latestTokenInfo?.total_token_usage || summary.latestTokenInfo?.last_token_usage || null;
+  const latestUsage = latestTokenUsage(summary);
   const rate = summary.latestTokenInfo?.rate_limits || null;
   const tools = Object.entries(summary.toolCounts || {}).sort((a, b) => b[1] - a[1]);
   const roles = Object.entries(summary.roleCounts || {}).sort((a, b) => b[1] - a[1]);
@@ -301,8 +317,8 @@ function applyConversationFilters(items) {
 }
 
 function renderConversation() {
-  const paired = pairConversation(state.conversation);
-  const items = applyConversationFilters(paired);
+  const items = visibleConversationItems();
+  const query = els.conversationFilter.value.trim();
 
   if (items.length === 0) {
     els.conversation.innerHTML = '<div class="empty">No conversation items match this view.</div>';
@@ -310,23 +326,28 @@ function renderConversation() {
   }
 
   const collapseTools = els.conversationCollapse.checked;
-  els.conversation.innerHTML = items.map(item => renderItem(item, collapseTools)).join('');
+  els.conversation.innerHTML = items.map(item => renderItem(item, collapseTools, query)).join('');
 }
 
-function renderItem(item, collapseTools) {
-  if (item.kind === 'tool') return renderToolBubble(item, collapseTools);
-  if (item.kind === 'tool-result') return renderOrphanResult(item, collapseTools);
-  return renderMessageBubble(item);
+function visibleConversationItems() {
+  return applyConversationFilters(pairConversation(state.conversation));
 }
 
-function renderMessageBubble(item) {
+function renderItem(item, collapseTools, query) {
+  if (item.kind === 'tool') return renderToolBubble(item, collapseTools, query);
+  if (item.kind === 'tool-result') return renderOrphanResult(item, collapseTools, query);
+  return renderMessageBubble(item, query);
+}
+
+function renderMessageBubble(item, query) {
   const roleLabel = `${item.role}${item.phase ? ` / ${item.phase}` : ''}`;
   const isAssistantOrUser = item.role === 'user' || item.role === 'assistant';
   const body = isAssistantOrUser
-    ? renderMarkdown(item.text || '')
-    : `<pre class="plain-text">${escapeHtml(item.text || '')}</pre>`;
+    ? highlightHtml(renderMarkdown(item.text || ''), query)
+    : `<pre class="plain-text">${highlightText(item.text || '', query)}</pre>`;
+  const key = conversationItemKey(item);
   return `
-    <article class="bubble ${escapeHtml(item.role)}">
+    <article class="bubble ${escapeHtml(item.role)}" id="conversation-${escapeHtml(key)}" data-conversation-key="${escapeHtml(key)}">
       <div class="bubble-meta">
         <span>${escapeHtml(roleLabel)}</span>
         <span>${escapeHtml(fmtDate(item.timestamp))}</span>
@@ -336,32 +357,38 @@ function renderMessageBubble(item) {
   `;
 }
 
-function renderOrphanResult(item, collapseTools) {
+function renderOrphanResult(item, collapseTools, query) {
   const title = `result ${item.callId || ''}`.trim();
+  const meta = toolResultMeta(item);
   return `
-    <details class="bubble tool-result" ${collapseTools ? '' : 'open'}>
+    <details class="bubble tool-result tool-${escapeHtml(meta.state)}" ${collapseTools ? '' : 'open'}>
       <summary class="tool-summary">
-        <span>${escapeHtml(title)}</span>
-        <span>${escapeHtml(fmtDate(item.timestamp))}</span>
+        <span>${highlightText(title, query)}</span>
+        <span class="tool-meta-right">
+          ${renderToolResultBadges(meta)}
+          <span>${escapeHtml(fmtDate(item.timestamp))}</span>
+        </span>
       </summary>
-      <div class="tool-body">${renderToolOutput(null, item)}</div>
+      <div class="tool-body">${renderToolOutput(null, item, query)}</div>
     </details>
   `;
 }
 
-function renderToolBubble(item, collapseTools) {
+function renderToolBubble(item, collapseTools, query) {
   const tool = item.toolName || 'tool';
   const renderer = TOOL_RENDERERS[tool] || renderGenericTool;
   const parsedInput = parseInput(item);
-  const head = renderer.head ? renderer.head(parsedInput, item) : `${tool}`;
-  const body = renderer.body ? renderer.body(parsedInput, item) : renderGenericTool.body(parsedInput, item);
-  const resultBody = renderToolOutput(tool, item.result);
+  const head = highlightHtml(renderer.head ? renderer.head(parsedInput, item) : escapeHtml(tool), query);
+  const body = highlightHtml(renderer.body ? renderer.body(parsedInput, item) : renderGenericTool.body(parsedInput, item), query);
+  const resultBody = renderToolOutput(tool, item.result, query);
+  const meta = toolResultMeta(item.result);
   const open = !collapseTools;
   return `
-    <details class="bubble tool tool-${escapeHtml(tool)}" ${open ? 'open' : ''}>
+    <details class="bubble tool tool-${escapeHtml(tool)} tool-${escapeHtml(meta.state)}" ${open ? 'open' : ''}>
       <summary class="tool-summary">
         <span class="tool-head">${head}</span>
         <span class="tool-meta-right">
+          ${renderToolResultBadges(meta)}
           ${item.callId ? `<span class="tool-callid">${escapeHtml(item.callId.slice(-8))}</span>` : ''}
           <span>${escapeHtml(fmtDate(item.timestamp))}</span>
         </span>
@@ -495,28 +522,59 @@ const renderGenericTool = {
   },
 };
 
-function renderToolOutput(toolName, result) {
+function renderToolOutput(toolName, result, query = '') {
   if (!result) return '';
   const text = typeof result.text === 'string' ? result.text : String(result.text ?? '');
   if (toolName === 'exec_command' || toolName === 'write_stdin') {
-    return `<pre class="code shell-output">${highlightExecOutput(text)}</pre>`;
+    return `<pre class="code shell-output">${highlightHtml(highlightExecOutput(text), query)}</pre>`;
   }
   if (toolName === 'apply_patch') {
     const ok = !/failed|error/i.test(text);
     const cls = ok ? 'ok' : 'fail';
-    return `<div class="patch-result ${cls}"><pre class="code">${escapeHtml(text)}</pre></div>`;
+    return `<div class="patch-result ${cls}"><pre class="code">${highlightText(text, query)}</pre></div>`;
   }
   if (toolName === 'update_plan' || toolName === 'update_goal' || toolName === 'get_goal') {
-    return `<pre class="code">${escapeHtml(text)}</pre>`;
+    return `<pre class="code">${highlightText(text, query)}</pre>`;
   }
   // Try to detect JSON
   const trimmed = text.trim();
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     try {
-      return `<pre class="code json">${escapeHtml(JSON.stringify(JSON.parse(trimmed), null, 2))}</pre>`;
+      return `<pre class="code json">${highlightText(JSON.stringify(JSON.parse(trimmed), null, 2), query)}</pre>`;
     } catch {}
   }
-  return `<pre class="code">${escapeHtml(text)}</pre>`;
+  return `<pre class="code">${highlightText(text, query)}</pre>`;
+}
+
+function toolResultMeta(result) {
+  if (!result) return { state: 'pending', badges: ['pending'] };
+  const text = typeof result.text === 'string' ? result.text : String(result.text ?? '');
+  const exitCodeMatch = /Process exited with code (\d+)/.exec(text);
+  const wallTimeMatch = /Wall time:\s*([^\n]+)/.exec(text);
+  const outputText = execOutputText(text);
+  const outputLines = outputText ? outputText.split('\n').filter(Boolean).length : 0;
+  const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : null;
+  const failed = exitCode != null
+    ? exitCode !== 0
+    : /timed out|failed|error/i.test(text);
+  const state = failed ? 'fail' : 'ok';
+  const badges = [];
+  if (exitCode != null) badges.push(`exit ${exitCode}`);
+  else badges.push(state);
+  if (wallTimeMatch) badges.push(wallTimeMatch[1].trim());
+  if (outputLines > 0) badges.push(`${formatNumber(outputLines)} lines`);
+  return { state, badges };
+}
+
+function execOutputText(text) {
+  const match = /\nOutput:\n([\s\S]*)$/.exec(text);
+  return match ? match[1].trim() : '';
+}
+
+function renderToolResultBadges(meta) {
+  return meta.badges.map(badge => `
+    <span class="tool-result-badge tool-result-${escapeHtml(meta.state)}">${escapeHtml(badge)}</span>
+  `).join('');
 }
 
 function planIcon(status) {
@@ -524,6 +582,46 @@ function planIcon(status) {
   if (status === 'in_progress') return '◐';
   if (status === 'cancelled') return '✗';
   return '○';
+}
+
+function conversationItemKey(item) {
+  return [
+    item.kind,
+    item.role,
+    item.timestamp,
+    item.callId || '',
+    hashText(item.text || ''),
+  ].join('-').replace(/[^a-zA-Z0-9_-]+/g, '-');
+}
+
+function hashText(text) {
+  let hash = 0;
+  const value = String(text || '');
+  for (let i = 0; i < value.length; i++) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function highlightText(text, query) {
+  const escaped = escapeHtml(text);
+  return highlightHtml(escaped, query);
+}
+
+function highlightHtml(html, query) {
+  const term = String(query || '').trim();
+  if (!term) return html;
+  const needle = escapeHtml(term);
+  if (!needle) return html;
+  const re = new RegExp(escapeRegExp(needle), 'gi');
+  return String(html).split(/(<[^>]+>)/g).map(part => {
+    if (part.startsWith('<')) return part;
+    return part.replace(re, match => `<mark class="search-hit">${match}</mark>`);
+  }).join('');
+}
+
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // --- apply_patch parsing ----------------------------------------------------
@@ -713,7 +811,7 @@ function renderInline(text) {
   const tokens = [];
   let placeholderIdx = 0;
   let working = text.replace(/`([^`\n]+)`/g, (_, code) => {
-    const key = ` CODE${placeholderIdx++} `;
+    const key = `__CODE${placeholderIdx++}__`;
     tokens.push({ key, html: `<code class="md-code-inline">${escapeHtml(code)}</code>` });
     return key;
   });
@@ -897,15 +995,30 @@ function renderTimeline() {
     return;
   }
 
-  els.timeline.innerHTML = state.timeline.map(item => `
-    <article class="event">
+  const blocks = [];
+  let currentGroup = '';
+  for (const item of state.timeline) {
+    const group = timelineGroup(item.timestamp);
+    if (group !== currentGroup) {
+      currentGroup = group;
+      blocks.push(`<div class="timeline-group">${escapeHtml(group)}</div>`);
+    }
+    const kind = timelineKind(item);
+    blocks.push(`
+    <article class="event timeline-event timeline-${escapeHtml(kind.id)}">
       <div class="event-head">
-        <span><span class="event-role">${escapeHtml(item.role)}</span> ${escapeHtml(item.type)}</span>
+        <span>
+          <span class="event-role">${escapeHtml(item.role)}</span>
+          ${escapeHtml(item.type)}
+          <span class="timeline-badge">${escapeHtml(kind.label)}</span>
+        </span>
         <span>${escapeHtml(fmtDate(item.timestamp))}</span>
       </div>
       <div class="event-body">${escapeHtml(item.preview || '')}</div>
     </article>
-  `).join('');
+    `);
+  }
+  els.timeline.innerHTML = blocks.join('');
 }
 
 function renderLastResponse() {
@@ -914,7 +1027,12 @@ function renderLastResponse() {
     els.lastResponseTab.innerHTML = '<div class="empty">No final response found in this rollout.</div>';
     return;
   }
+  const key = lastResponseConversationKey();
   els.lastResponseTab.innerHTML = `
+    <div class="last-response-actions">
+      <button type="button" data-copy-last-response>Copy response</button>
+      <button type="button" data-jump-last-response ${key ? '' : 'disabled'}>Jump to conversation</button>
+    </div>
     <article class="event">
       <div class="event-head">
         <span><span class="event-role">${escapeHtml(item.role)}</span> Last Response</span>
@@ -923,6 +1041,61 @@ function renderLastResponse() {
       <div class="event-body markdown">${renderMarkdown(item.preview || '')}</div>
     </article>
   `;
+}
+
+function timelineGroup(timestamp) {
+  if (!timestamp) return 'Unknown time';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return String(timestamp);
+  return date.toLocaleDateString();
+}
+
+function timelineKind(item) {
+  const payload = item.payload || {};
+  const preview = item.preview || '';
+  const role = String(item.role || '').toLowerCase();
+  const toolName = payload.name || '';
+  if (role === 'user' || role === 'user_message') return { id: 'user', label: 'User prompt' };
+  if ((role === 'assistant' || role === 'agent_message') && payload.phase === 'final_answer') {
+    return { id: 'final', label: 'Final answer' };
+  }
+  if ((role === 'tool-result' || payload.type === 'function_call_output') && /Process exited with code [1-9]|timed out|failed|error/i.test(preview)) {
+    return { id: 'tool-error', label: 'Tool error' };
+  }
+  if (toolName === 'apply_patch') return { id: 'patch', label: 'Patch' };
+  if (toolName === 'exec_command') {
+    return /\bgit\s+push\b/.test(preview) ? { id: 'git-push', label: 'Git push' } : { id: 'shell', label: 'Shell' };
+  }
+  if (role === 'tool') return { id: 'tool', label: toolName || 'Tool call' };
+  if (role === 'tool-result') return { id: 'tool-result', label: 'Tool result' };
+  return { id: 'event', label: payload.phase || payload.type || 'Event' };
+}
+
+function lastResponseConversationKey() {
+  const item = state.summary?.lastResponse;
+  if (!item) return '';
+  const visibleItems = visibleConversationItems();
+  for (let i = visibleItems.length - 1; i >= 0; i--) {
+    const candidate = visibleItems[i];
+    if (candidate.kind !== 'message') continue;
+    const assistantRole = candidate.role === 'assistant' || candidate.role === 'agent_message';
+    if (!assistantRole) continue;
+    if (sameResponseText(candidate.text, item.preview)) {
+      return conversationItemKey(candidate);
+    }
+  }
+  return '';
+}
+
+function sameResponseText(a, b) {
+  const left = comparableText(a);
+  const right = comparableText(b);
+  if (!left || !right) return false;
+  return left === right || left.includes(right) || right.includes(left);
+}
+
+function comparableText(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
 function renderRaw() {
@@ -1160,6 +1333,7 @@ function toggleRawFilterToken(token) {
 
 function renderRawEvent(item, open) {
   const { event, index, role, sender, label, preview } = item;
+  const payload = event.payload || {};
   const timestamp = fmtDate(event.timestamp) || event.timestamp || '';
   const json = JSON.stringify(event, null, 2);
   const senderClass = safeClass(sender.id);
@@ -1179,6 +1353,11 @@ function renderRawEvent(item, open) {
       </summary>
       <div class="raw-event-detail">
         ${renderRawMeta(event, role)}
+        <div class="raw-actions">
+          <button type="button" data-copy-raw="${escapeHtml(index)}">Copy JSON</button>
+          ${payload.call_id ? `<button type="button" data-copy-call-id="${escapeHtml(index)}">Copy call_id</button>` : ''}
+          <button type="button" data-raw-expand>Expand full</button>
+        </div>
         <pre class="code json raw-json">${highlightJson(json)}</pre>
       </div>
     </details>
@@ -1457,7 +1636,7 @@ els.sessions.addEventListener('click', event => {
 });
 
 els.sessionFilter.addEventListener('input', renderSessions);
-els.refresh.addEventListener('click', () => loadSessions().catch(showError));
+els.refresh.addEventListener('click', () => loadSessions({ refreshSelected: true }).catch(showError));
 els.conversationFilter.addEventListener('input', renderConversation);
 els.conversationTools.addEventListener('change', renderConversation);
 els.conversationInstructions.addEventListener('change', renderConversation);
@@ -1480,9 +1659,46 @@ els.rawSummary.addEventListener('click', event => {
   }
 });
 els.raw.addEventListener('click', event => {
+  const copyRawButton = event.target.closest('[data-copy-raw]');
+  if (copyRawButton) {
+    const rawEvent = state.events[Number(copyRawButton.dataset.copyRaw)];
+    if (rawEvent) {
+      copyText(JSON.stringify(rawEvent, null, 2)).then(() => showButtonFeedback(copyRawButton, 'Copied'));
+    }
+    return;
+  }
+  const copyCallIdButton = event.target.closest('[data-copy-call-id]');
+  if (copyCallIdButton) {
+    const rawEvent = state.events[Number(copyCallIdButton.dataset.copyCallId)];
+    const callId = rawEvent?.payload?.call_id;
+    if (callId) {
+      copyText(callId).then(() => showButtonFeedback(copyCallIdButton, 'Copied'));
+    }
+    return;
+  }
+  const expandButton = event.target.closest('[data-raw-expand]');
+  if (expandButton) {
+    const card = expandButton.closest('.raw-event');
+    const expanded = !card.classList.contains('raw-expanded');
+    card.classList.toggle('raw-expanded', expanded);
+    expandButton.textContent = expanded ? 'Collapse JSON' : 'Expand full';
+    return;
+  }
   if (!event.target.closest('[data-raw-more]')) return;
   state.rawLimit += RAW_PAGE_SIZE;
   renderRaw();
+});
+
+els.lastResponseTab.addEventListener('click', event => {
+  const copyButton = event.target.closest('[data-copy-last-response]');
+  if (copyButton) {
+    const text = state.summary?.lastResponse?.preview || '';
+    copyText(text).then(() => showButtonFeedback(copyButton, 'Copied'));
+    return;
+  }
+  if (event.target.closest('[data-jump-last-response]')) {
+    jumpToLastResponse();
+  }
 });
 
 document.querySelectorAll('.tab').forEach(button => {
@@ -1494,6 +1710,44 @@ document.querySelectorAll('.tab').forEach(button => {
 function showError(err) {
   console.error(err);
   els.codexHome.textContent = err.message;
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(String(text ?? ''));
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = String(text ?? '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  textarea.remove();
+}
+
+function showButtonFeedback(button, label) {
+  const previous = button.textContent;
+  button.textContent = label;
+  button.disabled = true;
+  setTimeout(() => {
+    button.textContent = previous;
+    button.disabled = false;
+  }, 1000);
+}
+
+function jumpToLastResponse() {
+  const key = lastResponseConversationKey();
+  if (!key) return;
+  switchTab('conversation');
+  requestAnimationFrame(() => {
+    const target = document.getElementById(`conversation-${key}`);
+    if (!target) return;
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    target.classList.add('conversation-target');
+    setTimeout(() => target.classList.remove('conversation-target'), 1800);
+  });
 }
 
 await loadHealth().catch(showError);

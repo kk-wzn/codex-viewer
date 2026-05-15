@@ -353,6 +353,44 @@ h2 {
   line-height: 1.45;
 }
 
+.timeline-group {
+  position: sticky;
+  top: 42px;
+  z-index: 4;
+  margin: 10px 0 8px;
+  padding: 4px 8px;
+  border: 1px solid #34342e;
+  border-radius: 6px;
+  background: #10100f;
+  color: #a8a293;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.timeline-event {
+  border-left: 4px solid #6e6a5e;
+}
+
+.timeline-user { border-left-color: #4f8dd8; }
+.timeline-final { border-left-color: #65a765; }
+.timeline-tool-error { border-left-color: #e07b7b; }
+.timeline-patch { border-left-color: #c89bd8; }
+.timeline-git-push { border-left-color: #7eb6d8; }
+.timeline-shell,
+.timeline-tool { border-left-color: #d19a3a; }
+
+.timeline-badge {
+  display: inline-block;
+  margin-left: 8px;
+  border: 1px solid #3c3a2f;
+  border-radius: 4px;
+  background: #202018;
+  color: #d8d2c2;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 650;
+}
+
 .conversation-toolbar,
 .raw-toolbar {
   margin-bottom: 10px;
@@ -649,6 +687,30 @@ h2 {
   background: #090907;
 }
 
+.raw-actions,
+.last-response-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.raw-actions button,
+.last-response-actions button {
+  border: 1px solid #34342e;
+  border-radius: 6px;
+  background: #1a1a17;
+  color: #f0eee6;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.raw-actions button:hover,
+.last-response-actions button:hover {
+  border-color: #d19a3a;
+}
+
 .raw-meta {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -685,6 +747,10 @@ h2 {
   overflow: auto;
   white-space: pre;
   overflow-wrap: normal;
+}
+
+.raw-expanded .raw-json {
+  max-height: none;
 }
 
 .conversation-toolbar label {
@@ -728,6 +794,20 @@ h2 {
   align-self: stretch;
   background: #111510;
   border-color: #32402f;
+}
+
+.bubble.tool-fail,
+.bubble.tool-result.tool-fail {
+  border-color: #703737;
+}
+
+.bubble.tool-fail > .tool-summary,
+.bubble.tool-result.tool-fail > .tool-summary {
+  background: #251414;
+}
+
+.conversation-target {
+  box-shadow: 0 0 0 2px #d19a3a;
 }
 
 .bubble-meta,
@@ -937,6 +1017,8 @@ pre.plain-text {
   display: inline-flex;
   gap: 8px;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   color: #a8a293;
   font-size: 11px;
 }
@@ -948,6 +1030,32 @@ pre.plain-text {
   border-radius: 4px;
   padding: 0 5px;
   font-size: 10px;
+}
+
+.tool-result-badge {
+  border: 1px solid #2a3a2c;
+  border-radius: 4px;
+  background: #0e1410;
+  color: #a8a293;
+  padding: 0 5px;
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
+
+.tool-result-ok {
+  color: #c9e2c9;
+  border-color: #2f5639;
+}
+
+.tool-result-fail {
+  color: #f0b8b8;
+  border-color: #703737;
+  background: #211010;
+}
+
+.tool-result-pending {
+  color: #d8d2c2;
 }
 
 .tool-body {
@@ -1000,6 +1108,13 @@ pre.plain-text {
 .shell-output {
   background: #050605;
   border-color: #1f261f;
+}
+
+.search-hit {
+  background: #705b2f;
+  color: #fff2c7;
+  border-radius: 3px;
+  padding: 0 2px;
 }
 
 /* --- update_plan ------------------------------------------------------- */
