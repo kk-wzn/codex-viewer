@@ -12,12 +12,13 @@
         <div>
           <div class="brand-line">
             <h1>Codex Viewer</h1>
-            <span id="app-version" class="version-badge">v0.1.0</span>
+            <span id="app-version" class="version-badge">v0.2.0</span>
           </div>
           <p id="codex-home">Loading Codex data...</p>
         </div>
         <div class="actions">
           <button id="refresh-button" title="Refresh sessions">Refresh</button>
+          <span id="refresh-status" class="refresh-status" aria-live="polite"></span>
         </div>
       </header>
 
@@ -29,7 +30,9 @@
           </div>
           <div class="session-toolbar">
             <input id="session-filter" placeholder="Search sessions..." />
+            <button id="session-clear" class="icon-button" type="button" title="Clear session search" aria-label="Clear session search">×</button>
           </div>
+          <div id="session-filter-note" class="session-filter-note hidden"></div>
           <div id="sessions" class="sessions"></div>
         </aside>
 
@@ -57,6 +60,9 @@
             <div id="conversation-tab" class="tab-panel" role="tabpanel">
               <div class="conversation-toolbar">
                 <input id="conversation-filter" placeholder="Search conversation..." />
+                <span id="conversation-search-status" class="search-status">No search</span>
+                <button id="conversation-prev-match" type="button" title="Previous search match" disabled>Prev</button>
+                <button id="conversation-next-match" type="button" title="Next search match" disabled>Next</button>
                 <label>
                   <input id="conversation-tools" type="checkbox" checked />
                   Tools
@@ -69,13 +75,23 @@
                   <input id="conversation-collapse" type="checkbox" checked />
                   Collapse tools
                 </label>
+                <button id="conversation-expand-failed" type="button" title="Open failed tool calls">Open failed tools</button>
               </div>
               <div id="conversation" class="conversation-list"></div>
             </div>
-            <div id="timeline-tab" class="tab-panel hidden" role="tabpanel"></div>
+            <div id="timeline-tab" class="tab-panel hidden" role="tabpanel">
+              <div class="timeline-toolbar">
+                <input id="timeline-filter" placeholder="Search timeline..." />
+                <select id="timeline-kind-filter" aria-label="Filter timeline by kind"></select>
+                <span id="timeline-summary" class="search-status"></span>
+              </div>
+              <div id="timeline-kind-chips" class="timeline-kind-chips"></div>
+              <div id="timeline-list"></div>
+            </div>
             <div id="last-response-tab" class="tab-panel hidden" role="tabpanel"></div>
             <div id="raw-tab" class="tab-panel hidden" role="tabpanel">
               <div class="raw-toolbar">
+                <div id="raw-builder" class="raw-builder"></div>
                 <input id="raw-filter" placeholder="Filter raw events, e.g. sender:tool type:response_item tool:exec_command" />
                 <div id="raw-summary" class="raw-summary"></div>
               </div>

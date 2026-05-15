@@ -11,6 +11,9 @@ const state = {
   tab: 'conversation',
   tabScroll: {},
   rawLimit: 200,
+  conversationMatchIndex: 0,
+  timelineQuery: '',
+  timelineKind: 'all',
 };
 
 const RAW_PAGE_SIZE = 200;
@@ -20,8 +23,11 @@ const els = {
   codexHome: document.getElementById('codex-home'),
   version: document.getElementById('app-version'),
   refresh: document.getElementById('refresh-button'),
+  refreshStatus: document.getElementById('refresh-status'),
   count: document.getElementById('session-count'),
   sessionFilter: document.getElementById('session-filter'),
+  sessionClear: document.getElementById('session-clear'),
+  sessionFilterNote: document.getElementById('session-filter-note'),
   sessions: document.getElementById('sessions'),
   empty: document.getElementById('empty'),
   detail: document.getElementById('detail'),
@@ -33,13 +39,23 @@ const els = {
   conversation: document.getElementById('conversation'),
   conversationTab: document.getElementById('conversation-tab'),
   conversationFilter: document.getElementById('conversation-filter'),
+  conversationSearchStatus: document.getElementById('conversation-search-status'),
+  conversationPrevMatch: document.getElementById('conversation-prev-match'),
+  conversationNextMatch: document.getElementById('conversation-next-match'),
   conversationTools: document.getElementById('conversation-tools'),
   conversationInstructions: document.getElementById('conversation-instructions'),
   conversationCollapse: document.getElementById('conversation-collapse'),
+  conversationExpandFailed: document.getElementById('conversation-expand-failed'),
   timeline: document.getElementById('timeline-tab'),
+  timelineFilter: document.getElementById('timeline-filter'),
+  timelineKindFilter: document.getElementById('timeline-kind-filter'),
+  timelineSummary: document.getElementById('timeline-summary'),
+  timelineKindChips: document.getElementById('timeline-kind-chips'),
+  timelineList: document.getElementById('timeline-list'),
   lastResponseTab: document.getElementById('last-response-tab'),
   raw: document.getElementById('raw-events'),
   rawFilter: document.getElementById('raw-filter'),
+  rawBuilder: document.getElementById('raw-builder'),
   rawSummary: document.getElementById('raw-summary'),
   rawTab: document.getElementById('raw-tab'),
   timelineTab: document.getElementById('timeline-tab'),
@@ -96,12 +112,31 @@ function renderSessions() {
   const sessions = filter
     ? state.sessions.filter(session => sessionSearchText(session).includes(filter))
     : state.sessions;
+  const selectedSession = state.sessions.find(session => session.id === state.selectedId);
+  const selectedVisible = !state.selectedId || sessions.some(session => session.id === state.selectedId);
   els.count.textContent = filter
     ? `${formatNumber(sessions.length)} / ${formatNumber(state.sessions.length)}`
     : String(state.sessions.length);
+  els.sessionClear.classList.toggle('visible', Boolean(filter));
+  els.sessionClear.disabled = !filter;
+  if (filter && selectedSession && !selectedVisible) {
+    els.sessionFilterNote.classList.remove('hidden');
+    els.sessionFilterNote.innerHTML = `
+      Current session hidden by search:
+      <button type="button" data-clear-session-filter>${escapeHtml(sessionName(selectedSession))}</button>
+    `;
+  } else {
+    els.sessionFilterNote.classList.add('hidden');
+    els.sessionFilterNote.innerHTML = '';
+  }
 
   if (sessions.length === 0) {
-    els.sessions.innerHTML = '<div class="session-empty">No sessions match this search.</div>';
+    els.sessions.innerHTML = `
+      <div class="session-empty">
+        No sessions match this search.
+        ${filter ? '<button type="button" data-clear-session-filter>Clear search</button>' : ''}
+      </div>
+    `;
     return;
   }
 
@@ -143,6 +178,12 @@ async function loadSelectedSession(id, { resetView }) {
   if (resetView) {
     state.rawLimit = RAW_PAGE_SIZE;
     state.tabScroll = {};
+    state.conversationMatchIndex = 0;
+    state.timelineQuery = '';
+    state.timelineKind = 'all';
+    els.conversationFilter.value = '';
+    els.timelineFilter.value = '';
+    els.rawFilter.value = '';
   }
   renderSessions();
   closeEventSource();
@@ -345,11 +386,63 @@ function renderConversation() {
 
   if (items.length === 0) {
     els.conversation.innerHTML = '<div class="empty">No conversation items match this view.</div>';
+    updateConversationSearchState(0);
     return;
   }
 
   const collapseTools = els.conversationCollapse.checked;
   els.conversation.innerHTML = items.map(item => renderItem(item, collapseTools, query)).join('');
+  updateConversationSearchState(items.length);
+}
+
+function updateConversationSearchState(itemCount) {
+  const query = els.conversationFilter.value.trim();
+  const marks = Array.from(els.conversation.querySelectorAll('mark.search-hit'));
+  const hasMatches = marks.length > 0;
+  state.conversationMatchIndex = hasMatches
+    ? Math.min(Math.max(state.conversationMatchIndex, 0), marks.length - 1)
+    : 0;
+
+  els.conversationPrevMatch.disabled = !hasMatches;
+  els.conversationNextMatch.disabled = !hasMatches;
+  if (!query) {
+    els.conversationSearchStatus.textContent = `${formatNumber(itemCount)} items`;
+    clearConversationCurrentMatch();
+    return;
+  }
+  els.conversationSearchStatus.textContent = hasMatches
+    ? `${formatNumber(state.conversationMatchIndex + 1)} / ${formatNumber(marks.length)} matches in ${formatNumber(itemCount)} items`
+    : `0 matches in ${formatNumber(itemCount)} items`;
+  if (hasMatches) activateConversationMatch({ scroll: true });
+}
+
+function clearConversationCurrentMatch() {
+  els.conversation.querySelectorAll('.search-hit-current').forEach(node => node.classList.remove('search-hit-current'));
+  els.conversation.querySelectorAll('.conversation-match-current').forEach(node => node.classList.remove('conversation-match-current'));
+}
+
+function activateConversationMatch({ scroll }) {
+  const marks = Array.from(els.conversation.querySelectorAll('mark.search-hit'));
+  if (marks.length === 0) return;
+  clearConversationCurrentMatch();
+  const mark = marks[state.conversationMatchIndex % marks.length];
+  mark.classList.add('search-hit-current');
+  const detail = mark.closest('details');
+  if (detail) detail.open = true;
+  const item = mark.closest('.bubble');
+  if (item) item.classList.add('conversation-match-current');
+  if (scroll) {
+    mark.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    updateBackToTop();
+  }
+}
+
+function moveConversationMatch(direction) {
+  const marks = els.conversation.querySelectorAll('mark.search-hit');
+  if (marks.length === 0) return;
+  state.conversationMatchIndex = (state.conversationMatchIndex + direction + marks.length) % marks.length;
+  els.conversationSearchStatus.textContent = `${formatNumber(state.conversationMatchIndex + 1)} / ${formatNumber(marks.length)} matches`;
+  activateConversationMatch({ scroll: true });
 }
 
 function visibleConversationItems() {
@@ -1013,35 +1106,148 @@ function highlightExecOutput(text) {
 // ---------------------------------------------------------------------------
 
 function renderTimeline() {
+  if (els.timelineFilter.value !== state.timelineQuery) els.timelineFilter.value = state.timelineQuery;
+  renderTimelineControls();
   if (state.timeline.length === 0) {
-    els.timeline.innerHTML = '<div class="empty">No conversation events found in this rollout.</div>';
+    els.timelineList.innerHTML = '<div class="empty">No conversation events found in this rollout.</div>';
     return;
   }
 
+  const query = state.timelineQuery.trim().toLowerCase();
+  const kindFilter = state.timelineKind;
+  const allItems = state.timeline.map((item, position) => {
+    const kind = timelineKind(item);
+    return {
+      item,
+      position,
+      rawIndex: timelineRawIndex(item, position),
+      kind,
+      conversationKey: conversationKeyForTimeline(item),
+    };
+  });
+  const visibleItems = allItems.filter(entry => {
+    if (kindFilter !== 'all' && entry.kind.id !== kindFilter) return false;
+    if (!query) return true;
+    return timelineSearchText(entry.item, entry.kind).includes(query);
+  });
+
+  els.timelineSummary.textContent = `${formatNumber(visibleItems.length)} / ${formatNumber(allItems.length)} events`;
   const blocks = [];
   let currentGroup = '';
-  for (const item of state.timeline) {
+  for (const entry of visibleItems) {
+    const item = entry.item;
     const group = timelineGroup(item.timestamp);
     if (group !== currentGroup) {
       currentGroup = group;
       blocks.push(`<div class="timeline-group">${escapeHtml(group)}</div>`);
     }
-    const kind = timelineKind(item);
+    const rawLabel = entry.rawIndex >= 0 ? `Raw #${entry.rawIndex + 1}` : 'Raw';
     blocks.push(`
-    <article class="event timeline-event timeline-${escapeHtml(kind.id)}">
+    <article class="event timeline-event timeline-${escapeHtml(entry.kind.id)}" id="timeline-${escapeHtml(timelineItemKey(item, entry.position))}">
       <div class="event-head">
         <span>
           <span class="event-role">${escapeHtml(item.role)}</span>
           ${escapeHtml(item.type)}
-          <span class="timeline-badge">${escapeHtml(kind.label)}</span>
+          <span class="timeline-badge">${escapeHtml(entry.kind.label)}</span>
         </span>
         <span>${escapeHtml(fmtDate(item.timestamp))}</span>
       </div>
-      <div class="event-body">${escapeHtml(item.preview || '')}</div>
+      <div class="event-body">${highlightText(item.preview || '', state.timelineQuery)}</div>
+      <div class="timeline-actions">
+        <button type="button" data-jump-conversation="${escapeHtml(entry.conversationKey)}" ${entry.conversationKey ? '' : 'disabled'}>Conversation</button>
+        <button type="button" data-jump-raw="${escapeHtml(entry.rawIndex)}" ${entry.rawIndex >= 0 ? '' : 'disabled'}>${escapeHtml(rawLabel)}</button>
+        ${item.payload?.call_id ? `<button type="button" data-raw-call-id="${escapeHtml(item.payload.call_id)}">call_id</button>` : ''}
+      </div>
     </article>
     `);
   }
-  els.timeline.innerHTML = blocks.join('');
+  els.timelineList.innerHTML = blocks.length ? blocks.join('') : '<div class="empty">No timeline events match this filter.</div>';
+}
+
+function renderTimelineControls() {
+  const entries = state.timeline.map(item => timelineKind(item));
+  const counts = new Map();
+  for (const kind of entries) {
+    counts.set(kind.id, { label: kind.label, count: (counts.get(kind.id)?.count || 0) + 1 });
+  }
+  if (state.timelineKind !== 'all' && !counts.has(state.timelineKind)) state.timelineKind = 'all';
+  const options = [['all', `All ${formatNumber(state.timeline.length)}`], ...[...counts.entries()]
+    .sort((a, b) => b[1].count - a[1].count || a[1].label.localeCompare(b[1].label))
+    .map(([id, item]) => [id, `${item.label} ${formatNumber(item.count)}`])];
+  els.timelineKindFilter.innerHTML = options.map(([id, label]) => `
+    <option value="${escapeHtml(id)}" ${id === state.timelineKind ? 'selected' : ''}>${escapeHtml(label)}</option>
+  `).join('');
+  els.timelineKindChips.innerHTML = options.slice(0, 9).map(([id, label]) => `
+    <button type="button" data-timeline-kind="${escapeHtml(id)}" class="${id === state.timelineKind ? 'active' : ''}">
+      ${escapeHtml(label)}
+    </button>
+  `).join('');
+}
+
+function timelineSearchText(item, kind) {
+  const payload = item.payload || {};
+  return [
+    item.timestamp,
+    item.type,
+    item.role,
+    item.preview,
+    kind.id,
+    kind.label,
+    payload.type,
+    payload.phase,
+    payload.name,
+    payload.call_id,
+  ].filter(Boolean).join('\n').toLowerCase();
+}
+
+function timelineItemKey(item, position) {
+  return [
+    item.index ?? position,
+    item.role,
+    item.type,
+    item.timestamp,
+    item.payload?.call_id || '',
+    hashText(item.preview || ''),
+  ].join('-').replace(/[^a-zA-Z0-9_-]+/g, '-');
+}
+
+function timelineRawIndex(item, position) {
+  if (Number.isInteger(item.index)) return item.index;
+  const found = state.events.findIndex(event => {
+    if (event.timestamp !== item.timestamp || event.type !== item.type) return false;
+    const payload = event.payload || {};
+    if (item.payload?.call_id && payload.call_id !== item.payload.call_id) return false;
+    return previewEvent(event) === item.preview || payload.type === item.payload?.type;
+  });
+  return found >= 0 ? found : position;
+}
+
+function conversationKeyForTimeline(item) {
+  const payload = item.payload || {};
+  const role = String(item.role || '').toLowerCase();
+  const items = pairConversation(state.conversation);
+  if (payload.call_id) {
+    const match = items.find(candidate => {
+      if (candidate.callId !== payload.call_id) return false;
+      if (role === 'tool-result') return candidate.kind === 'tool' || candidate.kind === 'tool-result';
+      return candidate.kind === 'tool';
+    });
+    if (match) return conversationItemKey(match);
+  }
+  for (let i = items.length - 1; i >= 0; i--) {
+    const candidate = items[i];
+    if (candidate.kind !== 'message') continue;
+    if (!sameTimelineRole(candidate.role, role)) continue;
+    if (sameResponseText(candidate.text, item.preview)) return conversationItemKey(candidate);
+  }
+  return '';
+}
+
+function sameTimelineRole(candidateRole, timelineRole) {
+  if (candidateRole === timelineRole) return true;
+  if (candidateRole === 'assistant' && timelineRole === 'agent_message') return true;
+  if (candidateRole === 'user' && timelineRole === 'user_message') return true;
+  return false;
 }
 
 function renderLastResponse() {
@@ -1051,6 +1257,7 @@ function renderLastResponse() {
     return;
   }
   const key = lastResponseConversationKey();
+  const responseParts = splitAppDirectives(item.preview || '');
   els.lastResponseTab.innerHTML = `
     <div class="last-response-actions">
       <button type="button" data-copy-last-response>Copy response</button>
@@ -1061,9 +1268,24 @@ function renderLastResponse() {
         <span><span class="event-role">${escapeHtml(item.role)}</span> Last Response</span>
         <span>${escapeHtml(fmtDate(item.timestamp))}</span>
       </div>
-      <div class="event-body markdown">${renderMarkdown(item.preview || '')}</div>
+      <div class="event-body markdown">${renderMarkdown(responseParts.text || '')}</div>
+      ${responseParts.directives.length ? `
+        <details class="directive-details">
+          <summary>${escapeHtml(formatNumber(responseParts.directives.length))} app directives hidden</summary>
+          <pre class="code">${escapeHtml(responseParts.directives.join('\n'))}</pre>
+        </details>
+      ` : ''}
     </article>
   `;
+}
+
+function splitAppDirectives(text) {
+  const directives = [];
+  const cleaned = String(text || '').replace(/::[a-zA-Z][\w-]*\{[^}]*\}/g, match => {
+    directives.push(match);
+    return '';
+  }).replace(/\n{3,}/g, '\n\n').trim();
+  return { text: cleaned, directives };
 }
 
 function timelineGroup(timestamp) {
@@ -1097,9 +1319,9 @@ function timelineKind(item) {
 function lastResponseConversationKey() {
   const item = state.summary?.lastResponse;
   if (!item) return '';
-  const visibleItems = visibleConversationItems();
-  for (let i = visibleItems.length - 1; i >= 0; i--) {
-    const candidate = visibleItems[i];
+  const items = pairConversation(state.conversation);
+  for (let i = items.length - 1; i >= 0; i--) {
+    const candidate = items[i];
     if (candidate.kind !== 'message') continue;
     const assistantRole = candidate.role === 'assistant' || candidate.role === 'agent_message';
     if (!assistantRole) continue;
@@ -1124,6 +1346,7 @@ function comparableText(text) {
 function renderRaw() {
   const rawFilter = parseRawFilter(els.rawFilter.value);
   const rawEvents = state.events.map(createRawEventItem);
+  els.rawBuilder.innerHTML = renderRawBuilder(rawEvents, rawFilter);
   const events = rawFilter.active
     ? rawEvents.filter(item => rawMatchesFilter(item, rawFilter))
     : rawEvents;
@@ -1146,6 +1369,50 @@ function renderRaw() {
     </div>
   ` : '';
   els.raw.innerHTML = `${visibleEvents.map(item => renderRawEvent(item, autoOpen)).join('')}${moreHtml}`;
+}
+
+function renderRawBuilder(rawEvents, rawFilter) {
+  const senders = uniqueRawOptions(rawEvents, item => [item.sender.id, item.sender.label]);
+  const types = uniqueRawOptions(rawEvents, item => [item.event.type, item.event.type]);
+  const tools = uniqueRawOptions(rawEvents, item => item.event.payload?.name ? [item.event.payload.name, item.event.payload.name] : null);
+  return `
+    <div class="raw-builder-row">
+      ${renderRawBuilderSelect('sender', 'Sender', senders, rawFilter)}
+      ${renderRawBuilderSelect('type', 'Type', types, rawFilter)}
+      ${renderRawBuilderSelect('tool', 'Tool', tools, rawFilter)}
+      <label class="raw-jump">
+        <span>Find</span>
+        <input id="raw-jump-input" placeholder="# or call_id" />
+        <button type="button" data-raw-jump>Go</button>
+      </label>
+    </div>
+  `;
+}
+
+function uniqueRawOptions(rawEvents, picker) {
+  const map = new Map();
+  for (const item of rawEvents) {
+    const picked = picker(item);
+    if (!picked || !picked[0]) continue;
+    const [value, label] = picked;
+    map.set(String(value), String(label));
+  }
+  return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+}
+
+function renderRawBuilderSelect(field, label, options, rawFilter) {
+  const active = rawFilter.fields.find(item => item.field === field)?.value || '';
+  return `
+    <label>
+      <span>${escapeHtml(label)}</span>
+      <select data-raw-build-field="${escapeHtml(field)}">
+        <option value="">Any</option>
+        ${options.map(([value, optionLabel]) => `
+          <option value="${escapeHtml(value)}" ${String(value).toLowerCase() === active ? 'selected' : ''}>${escapeHtml(optionLabel)}</option>
+        `).join('')}
+      </select>
+    </label>
+  `;
 }
 
 function createRawEventItem(event, index) {
@@ -1334,7 +1601,7 @@ function rawFieldMatches(item, field, value) {
     type: [item.event.type],
   }[field] || [];
 
-  if (['payload', 'role', 'sender', 'type'].includes(field)) {
+  if (['index', 'payload', 'role', 'sender', 'type'].includes(field)) {
     return values.some(itemValue => String(itemValue || '').toLowerCase() === value);
   }
   return values.some(itemValue => String(itemValue || '').toLowerCase().includes(value));
@@ -1354,6 +1621,65 @@ function toggleRawFilterToken(token) {
   renderRaw();
 }
 
+function setRawFilterField(field, value) {
+  const normalizedField = normalizeRawFilterField(field);
+  if (!normalizedField) return;
+  const tokens = splitFilterTokens(els.rawFilter.value)
+    .filter(token => !token.toLowerCase().startsWith(`${normalizedField}:`));
+  if (value) tokens.push(`${normalizedField}:${quoteFilterValue(value)}`);
+  els.rawFilter.value = tokens.join(' ');
+  state.rawLimit = RAW_PAGE_SIZE;
+  renderRaw();
+}
+
+function quoteFilterValue(value) {
+  const text = String(value || '').trim();
+  return /\s/.test(text) ? `"${text.replaceAll('"', '\\"')}"` : text;
+}
+
+function filterRawByCallId(callId) {
+  if (!callId) return;
+  els.rawFilter.value = `call_id:${quoteFilterValue(callId)}`;
+  state.rawLimit = RAW_PAGE_SIZE;
+  renderRaw();
+  requestAnimationFrame(() => {
+    const first = els.raw.querySelector('.raw-event');
+    if (first) {
+      first.open = true;
+      first.classList.add('raw-event-target');
+      first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      setTimeout(() => first.classList.remove('raw-event-target'), 1800);
+    }
+  });
+}
+
+function jumpToRawEvent(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= state.events.length) return;
+  switchTab('raw');
+  els.rawFilter.value = `index:${index + 1}`;
+  state.rawLimit = RAW_PAGE_SIZE;
+  renderRaw();
+  requestAnimationFrame(() => {
+    const target = document.getElementById(`raw-event-${index}`);
+    if (!target) return;
+    target.open = true;
+    target.classList.add('raw-event-target');
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setTimeout(() => target.classList.remove('raw-event-target'), 1800);
+  });
+}
+
+function jumpRawInput(value) {
+  const text = String(value || '').trim();
+  if (!text) return;
+  const eventNumber = /^#?\d+$/.test(text) ? Number(text.replace('#', '')) : NaN;
+  if (Number.isInteger(eventNumber) && eventNumber > 0) {
+    jumpToRawEvent(eventNumber - 1);
+    return;
+  }
+  filterRawByCallId(text);
+}
+
 function renderRawEvent(item, open) {
   const { event, index, role, sender, label, preview } = item;
   const payload = event.payload || {};
@@ -1361,7 +1687,7 @@ function renderRawEvent(item, open) {
   const json = JSON.stringify(event, null, 2);
   const senderClass = safeClass(sender.id);
   return `
-    <details class="raw-event raw-sender-${senderClass}" ${open ? 'open' : ''}>
+    <details class="raw-event raw-sender-${senderClass}" id="raw-event-${escapeHtml(index)}" data-raw-index="${escapeHtml(index)}" ${open ? 'open' : ''}>
       <summary class="raw-event-head">
         <span class="raw-event-main">
           <span class="raw-index">#${escapeHtml(index + 1)}</span>
@@ -1379,6 +1705,7 @@ function renderRawEvent(item, open) {
         <div class="raw-actions">
           <button type="button" data-copy-raw="${escapeHtml(index)}">Copy JSON</button>
           ${payload.call_id ? `<button type="button" data-copy-call-id="${escapeHtml(index)}">Copy call_id</button>` : ''}
+          ${payload.call_id ? `<button type="button" data-related-call-id="${escapeHtml(payload.call_id)}">Related call</button>` : ''}
           <button type="button" data-raw-expand>Expand full</button>
         </div>
         <pre class="code json raw-json">${highlightJson(json)}</pre>
@@ -1494,9 +1821,11 @@ function openEventSource(id) {
 
   es.addEventListener('entries', event => {
     const entries = JSON.parse(event.data);
+    const startIndex = state.events.length;
     state.events.push(...entries);
-    appendConversationItems(entries.flatMap(entryToConversationItems));
-    const timelineEntries = entries.map(entry => ({
+    appendConversationItems(entries.flatMap((entry, offset) => entryToConversationItems(entry, startIndex + offset)));
+    const timelineEntries = entries.map((entry, offset) => ({
+      index: startIndex + offset,
       timestamp: entry.timestamp || '',
       type: entry.type,
       role: entry.payload?.role || entry.payload?.type || entry.type,
@@ -1554,13 +1883,13 @@ function previewEvent(event) {
   return '';
 }
 
-function entryToConversationItems(entry) {
+function entryToConversationItems(entry, index = state.events.length) {
   const payload = entry.payload || {};
   if (entry.type === 'event_msg' && (payload.type === 'user_message' || payload.type === 'agent_message')) {
     const text = previewEvent(entry);
     if (!text || isEnvironmentContext(text)) return [];
     return [{
-      id: `${state.events.length}-${entry.timestamp || ''}`,
+      id: `${index}-${entry.timestamp || ''}`,
       timestamp: entry.timestamp || '',
       kind: 'message',
       role: payload.type === 'user_message' ? 'user' : 'assistant',
@@ -1573,7 +1902,7 @@ function entryToConversationItems(entry) {
     const text = previewEvent(entry);
     if (!text || isEnvironmentContext(text)) return [];
     return [{
-      id: `${state.events.length}-${entry.timestamp || ''}`,
+      id: `${index}-${entry.timestamp || ''}`,
       timestamp: entry.timestamp || '',
       kind: 'message',
       role: payload.role || 'message',
@@ -1584,7 +1913,7 @@ function entryToConversationItems(entry) {
   if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
     const isCustom = payload.type === 'custom_tool_call';
     return [{
-      id: `${state.events.length}-${payload.call_id || entry.timestamp || ''}`,
+      id: `${index}-${payload.call_id || entry.timestamp || ''}`,
       timestamp: entry.timestamp || '',
       kind: 'tool',
       role: 'tool',
@@ -1596,7 +1925,7 @@ function entryToConversationItems(entry) {
   }
   if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
     return [{
-      id: `${state.events.length}-${payload.call_id || entry.timestamp || ''}`,
+      id: `${index}-${payload.call_id || entry.timestamp || ''}`,
       timestamp: entry.timestamp || '',
       kind: 'tool-result',
       role: 'tool-result',
@@ -1655,22 +1984,76 @@ function switchTab(nextTab) {
 }
 
 els.sessions.addEventListener('click', event => {
+  if (event.target.closest('[data-clear-session-filter]')) {
+    clearSessionFilter();
+    return;
+  }
   const button = event.target.closest('.session');
   if (button) selectSession(button.dataset.id).catch(showError);
 });
 
+els.sessionFilterNote.addEventListener('click', event => {
+  if (event.target.closest('[data-clear-session-filter]')) clearSessionFilter();
+});
 els.sessionFilter.addEventListener('input', renderSessions);
-els.refresh.addEventListener('click', () => loadSessions({ refreshSelected: true }).catch(showError));
+els.sessionClear.addEventListener('click', clearSessionFilter);
+els.refresh.addEventListener('click', refreshSessions);
 els.detail.addEventListener('scroll', updateBackToTop);
 window.addEventListener('scroll', updateBackToTop, { passive: true });
 els.backToTop.addEventListener('click', scrollDetailToTop);
-els.conversationFilter.addEventListener('input', renderConversation);
+els.conversationFilter.addEventListener('input', () => {
+  state.conversationMatchIndex = 0;
+  renderConversation();
+});
+els.conversationPrevMatch.addEventListener('click', () => moveConversationMatch(-1));
+els.conversationNextMatch.addEventListener('click', () => moveConversationMatch(1));
+els.conversationExpandFailed.addEventListener('click', openFailedTools);
 els.conversationTools.addEventListener('change', renderConversation);
 els.conversationInstructions.addEventListener('change', renderConversation);
 els.conversationCollapse.addEventListener('change', renderConversation);
+els.timelineFilter.addEventListener('input', () => {
+  state.timelineQuery = els.timelineFilter.value;
+  renderTimeline();
+});
+els.timelineKindFilter.addEventListener('change', () => {
+  state.timelineKind = els.timelineKindFilter.value || 'all';
+  renderTimeline();
+});
+els.timelineTab.addEventListener('click', event => {
+  const kindButton = event.target.closest('[data-timeline-kind]');
+  if (kindButton) {
+    state.timelineKind = kindButton.dataset.timelineKind || 'all';
+    renderTimeline();
+    return;
+  }
+  const conversationButton = event.target.closest('[data-jump-conversation]');
+  if (conversationButton && conversationButton.dataset.jumpConversation) {
+    jumpToConversationKey(conversationButton.dataset.jumpConversation);
+    return;
+  }
+  const rawButton = event.target.closest('[data-jump-raw]');
+  if (rawButton) {
+    jumpToRawEvent(Number(rawButton.dataset.jumpRaw));
+    return;
+  }
+  const callButton = event.target.closest('[data-raw-call-id]');
+  if (callButton) {
+    switchTab('raw');
+    filterRawByCallId(callButton.dataset.rawCallId);
+  }
+});
 els.rawFilter.addEventListener('input', () => {
   state.rawLimit = RAW_PAGE_SIZE;
   renderRaw();
+});
+els.rawBuilder.addEventListener('change', event => {
+  const select = event.target.closest('[data-raw-build-field]');
+  if (select) setRawFilterField(select.dataset.rawBuildField, select.value);
+});
+els.rawBuilder.addEventListener('click', event => {
+  if (event.target.closest('[data-raw-jump]')) {
+    jumpRawInput(document.getElementById('raw-jump-input')?.value || '');
+  }
 });
 els.rawSummary.addEventListener('click', event => {
   const filterButton = event.target.closest('[data-raw-filter]');
@@ -1703,6 +2086,11 @@ els.raw.addEventListener('click', event => {
     }
     return;
   }
+  const relatedCallButton = event.target.closest('[data-related-call-id]');
+  if (relatedCallButton) {
+    filterRawByCallId(relatedCallButton.dataset.relatedCallId);
+    return;
+  }
   const expandButton = event.target.closest('[data-raw-expand]');
   if (expandButton) {
     const card = expandButton.closest('.raw-event');
@@ -1719,7 +2107,7 @@ els.raw.addEventListener('click', event => {
 els.lastResponseTab.addEventListener('click', event => {
   const copyButton = event.target.closest('[data-copy-last-response]');
   if (copyButton) {
-    const text = state.summary?.lastResponse?.preview || '';
+    const text = splitAppDirectives(state.summary?.lastResponse?.preview || '').text;
     copyText(text).then(() => showButtonFeedback(copyButton, 'Copied'));
     return;
   }
@@ -1737,6 +2125,60 @@ document.querySelectorAll('.tab').forEach(button => {
 function showError(err) {
   console.error(err);
   els.codexHome.textContent = err.message;
+}
+
+function clearSessionFilter() {
+  els.sessionFilter.value = '';
+  renderSessions();
+  els.sessionFilter.focus();
+}
+
+async function refreshSessions() {
+  const previousText = els.refresh.textContent;
+  els.refresh.disabled = true;
+  els.refresh.textContent = 'Refreshing...';
+  els.refreshStatus.textContent = 'Updating';
+  try {
+    await loadSessions({ refreshSelected: true });
+    els.refreshStatus.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    els.refreshStatus.textContent = 'Refresh failed';
+    showError(err);
+  } finally {
+    els.refresh.disabled = false;
+    els.refresh.textContent = previousText;
+  }
+}
+
+function openFailedTools() {
+  const failed = els.conversation.querySelectorAll('details.tool-fail, details.tool-result.tool-fail');
+  failed.forEach(detail => {
+    detail.open = true;
+  });
+  els.conversationExpandFailed.textContent = failed.length
+    ? `Opened ${formatNumber(failed.length)} failed`
+    : 'No failed tools';
+  setTimeout(() => {
+    els.conversationExpandFailed.textContent = 'Open failed tools';
+  }, 1200);
+}
+
+function jumpToConversationKey(key) {
+  if (!key) return;
+  els.conversationFilter.value = '';
+  els.conversationTools.checked = true;
+  els.conversationInstructions.checked = true;
+  state.conversationMatchIndex = 0;
+  switchTab('conversation');
+  renderConversation();
+  requestAnimationFrame(() => {
+    const target = document.getElementById(`conversation-${key}`);
+    if (!target) return;
+    if (target.tagName.toLowerCase() === 'details') target.open = true;
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    target.classList.add('conversation-target');
+    setTimeout(() => target.classList.remove('conversation-target'), 1800);
+  });
 }
 
 async function copyText(text) {
@@ -1766,15 +2208,7 @@ function showButtonFeedback(button, label) {
 
 function jumpToLastResponse() {
   const key = lastResponseConversationKey();
-  if (!key) return;
-  switchTab('conversation');
-  requestAnimationFrame(() => {
-    const target = document.getElementById(`conversation-${key}`);
-    if (!target) return;
-    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    target.classList.add('conversation-target');
-    setTimeout(() => target.classList.remove('conversation-target'), 1800);
-  });
+  jumpToConversationKey(key);
 }
 
 await loadHealth().catch(showError);

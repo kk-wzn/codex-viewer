@@ -15,12 +15,14 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 2px solid #7eb6d8;
   outline-offset: 2px;
 }
@@ -74,9 +76,29 @@ h2 {
   font-size: 12px;
 }
 
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.refresh-status {
+  min-width: 112px;
+  color: #a8a293;
+  font-size: 12px;
+  text-align: right;
+}
+
 .actions button,
 .tab,
-.sidebar button {
+.sidebar button,
+.conversation-toolbar button,
+.timeline-toolbar button,
+.timeline-kind-chips button,
+.timeline-actions button,
+.raw-builder button,
+.raw-builder select,
+.raw-builder input {
   border: 1px solid #34342e;
   background: #1a1a17;
   color: #f0eee6;
@@ -87,7 +109,12 @@ h2 {
 
 .actions button:hover,
 .tab:hover,
-.sidebar button:hover {
+.sidebar button:hover,
+.conversation-toolbar button:hover,
+.timeline-toolbar button:hover,
+.timeline-kind-chips button:hover,
+.timeline-actions button:hover,
+.raw-builder button:hover {
   border-color: #d19a3a;
 }
 
@@ -115,6 +142,9 @@ h2 {
 }
 
 .session-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
   padding: 8px;
   border-bottom: 1px solid #25251f;
 }
@@ -126,6 +156,32 @@ h2 {
   border: 1px solid #34342e;
   border-radius: 6px;
   padding: 8px 10px;
+}
+
+.icon-button {
+  width: 36px;
+  display: none;
+  place-items: center;
+  padding: 0;
+}
+
+.icon-button.visible {
+  display: grid;
+}
+
+.session-filter-note {
+  padding: 8px 10px;
+  border-bottom: 1px solid #25251f;
+  color: #a8a293;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.session-filter-note button,
+.session-empty button {
+  margin-top: 6px;
+  width: 100%;
+  text-align: left;
 }
 
 .sessions {
@@ -431,6 +487,52 @@ h2 {
   font-weight: 650;
 }
 
+.timeline-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 240px) auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.timeline-toolbar input,
+.timeline-toolbar select {
+  width: 100%;
+  background: #10100f;
+  color: #f0eee6;
+  border: 1px solid #34342e;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.timeline-kind-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.timeline-kind-chips button {
+  font-size: 12px;
+}
+
+.timeline-kind-chips button.active {
+  border-color: #d19a3a;
+  background: #2a2519;
+}
+
+.timeline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+
+.timeline-actions button {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
 .conversation-toolbar,
 .raw-toolbar {
   margin-bottom: 10px;
@@ -448,9 +550,16 @@ h2 {
   flex-wrap: wrap;
 }
 
+.search-status {
+  color: #a8a293;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 #conversation-filter,
 #session-filter,
-.raw-toolbar input {
+.raw-toolbar input,
+.raw-builder select {
   width: 100%;
   background: #10100f;
   color: #f0eee6;
@@ -462,6 +571,51 @@ h2 {
 #conversation-filter {
   flex: 1 1 260px;
   min-width: 180px;
+}
+
+.search-hit-current {
+  background: #f0c66a;
+  color: #10100f;
+  box-shadow: 0 0 0 1px #f0eee6;
+}
+
+.conversation-match-current {
+  box-shadow: 0 0 0 2px #d19a3a;
+}
+
+.raw-builder {
+  border: 1px solid #25251f;
+  border-radius: 8px;
+  background: #151512;
+  padding: 8px;
+}
+
+.raw-builder-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.raw-builder label {
+  display: grid;
+  gap: 4px;
+  color: #a8a293;
+  font-size: 11px;
+}
+
+.raw-builder .raw-jump {
+  grid-template-columns: 1fr auto;
+  align-items: end;
+}
+
+.raw-builder .raw-jump span {
+  grid-column: 1 / -1;
+}
+
+.raw-builder button,
+.raw-builder input,
+.raw-builder select {
+  min-width: 0;
 }
 
 .raw-summary {
@@ -791,6 +945,26 @@ h2 {
 
 .raw-expanded .raw-json {
   max-height: none;
+}
+
+.raw-event-target {
+  box-shadow: 0 0 0 2px #d19a3a;
+}
+
+.directive-details {
+  border-top: 1px solid #34342e;
+  background: #10100f;
+}
+
+.directive-details summary {
+  cursor: pointer;
+  color: #a8a293;
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.directive-details .code {
+  margin: 0 10px 10px;
 }
 
 .conversation-toolbar label {
@@ -1320,6 +1494,11 @@ pre.plain-text {
 
   .conversation-toolbar {
     align-items: flex-start;
+  }
+
+  .timeline-toolbar,
+  .raw-builder-row {
+    grid-template-columns: 1fr;
   }
 
   .raw-summary {

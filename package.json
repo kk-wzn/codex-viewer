@@ -1,6 +1,6 @@
 {
   "name": "codex-viewer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local Codex session viewer inspired by cc-viewer",
   "type": "module",
   "main": "server.js",
