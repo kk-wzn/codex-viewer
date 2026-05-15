@@ -14,6 +14,7 @@ const state = {
 };
 
 const RAW_PAGE_SIZE = 200;
+const BACK_TO_TOP_THRESHOLD = 420;
 
 const els = {
   codexHome: document.getElementById('codex-home'),
@@ -42,6 +43,7 @@ const els = {
   rawSummary: document.getElementById('raw-summary'),
   rawTab: document.getElementById('raw-tab'),
   timelineTab: document.getElementById('timeline-tab'),
+  backToTop: document.getElementById('back-to-top'),
 };
 
 function fmtDate(value) {
@@ -192,6 +194,7 @@ function renderDetail() {
   renderLastResponse();
   renderRaw();
   if (shouldStick) requestAnimationFrame(scrollDetailToBottom);
+  requestAnimationFrame(updateBackToTop);
 }
 
 function formatNumber(value) {
@@ -213,6 +216,26 @@ function scrollDetailToBottom() {
   if (state.tab === 'timeline' || state.tab === 'conversation') {
     els.detail.scrollTop = els.detail.scrollHeight;
   }
+  updateBackToTop();
+}
+
+function updateBackToTop() {
+  const detailScroll = els.detail.scrollTop || 0;
+  const pageScroll = window.scrollY || document.documentElement.scrollTop || 0;
+  const visible = !els.detail.classList.contains('hidden') && Math.max(detailScroll, pageScroll) > BACK_TO_TOP_THRESHOLD;
+  els.backToTop.classList.toggle('visible', visible);
+  els.backToTop.disabled = !visible;
+  els.backToTop.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
+function scrollDetailToTop() {
+  state.tabScroll[state.tab] = 0;
+  if (els.detail.scrollHeight > els.detail.clientHeight) {
+    els.detail.scrollTo({ top: 0, behavior: 'smooth' });
+  } else {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  requestAnimationFrame(updateBackToTop);
 }
 
 function renderInsights() {
@@ -1627,6 +1650,7 @@ function switchTab(nextTab) {
   els.rawTab.classList.toggle('hidden', state.tab !== 'raw');
   requestAnimationFrame(() => {
     els.detail.scrollTop = state.tabScroll[state.tab] || 0;
+    updateBackToTop();
   });
 }
 
@@ -1637,6 +1661,9 @@ els.sessions.addEventListener('click', event => {
 
 els.sessionFilter.addEventListener('input', renderSessions);
 els.refresh.addEventListener('click', () => loadSessions({ refreshSelected: true }).catch(showError));
+els.detail.addEventListener('scroll', updateBackToTop);
+window.addEventListener('scroll', updateBackToTop, { passive: true });
+els.backToTop.addEventListener('click', scrollDetailToTop);
 els.conversationFilter.addEventListener('input', renderConversation);
 els.conversationTools.addEventListener('change', renderConversation);
 els.conversationInstructions.addEventListener('change', renderConversation);

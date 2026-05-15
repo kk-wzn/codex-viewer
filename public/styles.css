@@ -178,6 +178,7 @@ h2 {
 .content {
   min-width: 0;
   overflow: hidden;
+  position: relative;
 }
 
 .empty {
@@ -191,6 +192,45 @@ h2 {
   height: 100%;
   overflow: auto;
   padding: 16px;
+}
+
+.back-to-top {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 20;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #5a4a2d;
+  border-radius: 8px;
+  background: #242016;
+  color: #f0eee6;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  font-size: 20px;
+  font-weight: 750;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity 140ms ease, transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.back-to-top.visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.back-to-top:hover {
+  background: #302818;
+  border-color: #d19a3a;
+}
+
+.back-to-top:disabled {
+  cursor: default;
 }
 
 .hidden {
@@ -1259,6 +1299,11 @@ pre.plain-text {
 
   .detail {
     height: auto;
+  }
+
+  .back-to-top {
+    right: 16px;
+    bottom: 16px;
   }
 
   .stats {

@@ -59,6 +59,7 @@ This first version focuses on Codex-native viewing:
 - clickable raw-event sender/type chips, copy actions, progressive rendering for long raw streams, and expandable formatted payloads
 - session search by title, path, model, branch, source, and timestamp
 - sticky view tabs with per-tab scroll restoration
+- floating back-to-top control for long session views
 - manual refresh that reloads the selected session detail and latest token usage
 - live append updates for the selected rollout file
 - sticky live scrolling when the viewer is already at the bottom
