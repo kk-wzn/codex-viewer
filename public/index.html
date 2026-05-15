@@ -27,6 +27,9 @@
             <span>Sessions</span>
             <span id="session-count" class="muted">0</span>
           </div>
+          <div class="session-toolbar">
+            <input id="session-filter" placeholder="Search sessions..." />
+          </div>
           <div id="sessions" class="sessions"></div>
         </aside>
 
@@ -44,14 +47,14 @@
             <div class="stats" id="stats"></div>
             <div id="insights" class="insights"></div>
 
-            <div class="tabs">
-              <button class="tab active" data-tab="conversation">Conversation</button>
-              <button class="tab" data-tab="timeline">Timeline</button>
-              <button class="tab" data-tab="last-response">Last Response</button>
-              <button class="tab" data-tab="raw">Raw events</button>
+            <div class="tabs" role="tablist" aria-label="Session views">
+              <button class="tab active" data-tab="conversation" role="tab" aria-selected="true">Conversation</button>
+              <button class="tab" data-tab="timeline" role="tab" aria-selected="false">Timeline</button>
+              <button class="tab" data-tab="last-response" role="tab" aria-selected="false">Last Response</button>
+              <button class="tab" data-tab="raw" role="tab" aria-selected="false">Raw events</button>
             </div>
 
-            <div id="conversation-tab" class="tab-panel">
+            <div id="conversation-tab" class="tab-panel" role="tabpanel">
               <div class="conversation-toolbar">
                 <input id="conversation-filter" placeholder="Search conversation..." />
                 <label>
@@ -69,11 +72,11 @@
               </div>
               <div id="conversation" class="conversation-list"></div>
             </div>
-            <div id="timeline-tab" class="tab-panel hidden"></div>
-            <div id="last-response-tab" class="tab-panel hidden"></div>
-            <div id="raw-tab" class="tab-panel hidden">
+            <div id="timeline-tab" class="tab-panel hidden" role="tabpanel"></div>
+            <div id="last-response-tab" class="tab-panel hidden" role="tabpanel"></div>
+            <div id="raw-tab" class="tab-panel hidden" role="tabpanel">
               <div class="raw-toolbar">
-                <input id="raw-filter" placeholder="Filter raw JSON..." />
+                <input id="raw-filter" placeholder="Filter raw events, e.g. sender:tool type:response_item tool:exec_command" />
                 <div id="raw-summary" class="raw-summary"></div>
               </div>
               <div id="raw-events" class="raw-events"></div>

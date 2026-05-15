@@ -9,13 +9,18 @@ const state = {
   conversation: [],
   eventSource: null,
   tab: 'conversation',
+  tabScroll: {},
+  rawLimit: 200,
 };
+
+const RAW_PAGE_SIZE = 200;
 
 const els = {
   codexHome: document.getElementById('codex-home'),
   version: document.getElementById('app-version'),
   refresh: document.getElementById('refresh-button'),
   count: document.getElementById('session-count'),
+  sessionFilter: document.getElementById('session-filter'),
   sessions: document.getElementById('sessions'),
   empty: document.getElementById('empty'),
   detail: document.getElementById('detail'),
@@ -74,7 +79,6 @@ async function loadHealth() {
 async function loadSessions() {
   const data = await fetchJson('/api/sessions?limit=200');
   state.sessions = data.sessions || [];
-  els.count.textContent = String(state.sessions.length);
   renderSessions();
   if (!state.selectedId && state.sessions.length > 0) {
     selectSession(state.sessions[0].id);
@@ -82,7 +86,20 @@ async function loadSessions() {
 }
 
 function renderSessions() {
-  els.sessions.innerHTML = state.sessions.map(session => `
+  const filter = els.sessionFilter.value.trim().toLowerCase();
+  const sessions = filter
+    ? state.sessions.filter(session => sessionSearchText(session).includes(filter))
+    : state.sessions;
+  els.count.textContent = filter
+    ? `${formatNumber(sessions.length)} / ${formatNumber(state.sessions.length)}`
+    : String(state.sessions.length);
+
+  if (sessions.length === 0) {
+    els.sessions.innerHTML = '<div class="session-empty">No sessions match this search.</div>';
+    return;
+  }
+
+  els.sessions.innerHTML = sessions.map(session => `
     <button class="session ${session.id === state.selectedId ? 'active' : ''}" data-id="${escapeHtml(session.id)}">
       <span class="session-title">${escapeHtml(sessionName(session))}</span>
       <span class="session-line muted">
@@ -96,8 +113,25 @@ function renderSessions() {
   `).join('');
 }
 
+function sessionSearchText(session) {
+  return [
+    session.id,
+    sessionName(session),
+    session.model,
+    session.modelProvider,
+    session.cwd,
+    session.rolloutPath,
+    session.gitBranch,
+    session.source,
+    fmtDate(session.updatedAt),
+    fmtDate(session.createdAt),
+  ].filter(Boolean).join('\n').toLowerCase();
+}
+
 async function selectSession(id) {
   state.selectedId = id;
+  state.rawLimit = RAW_PAGE_SIZE;
+  state.tabScroll = {};
   renderSessions();
   closeEventSource();
   els.live.textContent = 'loading';
@@ -892,40 +926,67 @@ function renderLastResponse() {
 }
 
 function renderRaw() {
-  const filter = els.rawFilter.value.trim().toLowerCase();
-  const rawEvents = state.events.map((event, index) => {
-    const role = rawEventRole(event);
-    const sender = rawEventSender(event, role);
-    const label = rawEventLabel(event);
-    const preview = rawEventPreview(event);
-    const search = [
-      String(index + 1),
-      event.timestamp,
-      event.type,
-      role,
-      sender.id,
-      sender.label,
-      label,
-      preview,
-      JSON.stringify(event),
-    ].filter(Boolean).join('\n').toLowerCase();
-    return { event, index, role, sender, label, preview, search };
-  });
-  const events = filter
-    ? rawEvents.filter(item => item.search.includes(filter))
+  const rawFilter = parseRawFilter(els.rawFilter.value);
+  const rawEvents = state.events.map(createRawEventItem);
+  const events = rawFilter.active
+    ? rawEvents.filter(item => rawMatchesFilter(item, rawFilter))
     : rawEvents;
+  const visibleEvents = events.slice(0, state.rawLimit);
 
-  els.rawSummary.innerHTML = renderRawSummary(events, rawEvents.length, filter);
+  els.rawSummary.innerHTML = renderRawSummary(events, rawEvents.length, rawFilter, visibleEvents.length);
   if (events.length === 0) {
     els.raw.innerHTML = '<div class="empty">No raw events match this filter.</div>';
     return;
   }
 
-  const autoOpen = events.length <= 3;
-  els.raw.innerHTML = events.map(item => renderRawEvent(item, autoOpen)).join('');
+  const autoOpen = visibleEvents.length <= 3;
+  const moreCount = events.length - visibleEvents.length;
+  const moreHtml = moreCount > 0 ? `
+    <div class="raw-more">
+      <button class="raw-more-button" type="button" data-raw-more>
+        Show next ${escapeHtml(formatNumber(Math.min(RAW_PAGE_SIZE, moreCount)))} events
+      </button>
+      <span class="muted">${escapeHtml(formatNumber(moreCount))} still hidden for performance</span>
+    </div>
+  ` : '';
+  els.raw.innerHTML = `${visibleEvents.map(item => renderRawEvent(item, autoOpen)).join('')}${moreHtml}`;
 }
 
-function renderRawSummary(events, total, filter) {
+function createRawEventItem(event, index) {
+  const role = rawEventRole(event);
+  const sender = rawEventSender(event, role);
+  const label = rawEventLabel(event);
+  const preview = rawEventPreview(event);
+  const payload = event.payload || {};
+  const directPreview = previewEvent(event);
+  const json = JSON.stringify(event);
+  const search = [
+    String(index + 1),
+    event.timestamp,
+    event.type,
+    role,
+    sender.id,
+    sender.label,
+    payload.type,
+    payload.phase,
+    payload.name,
+    payload.call_id,
+    label,
+    directPreview,
+  ].filter(Boolean).join('\n').toLowerCase();
+  return {
+    event,
+    index,
+    role,
+    sender,
+    label,
+    preview,
+    search,
+    json: json.toLowerCase(),
+  };
+}
+
+function renderRawSummary(events, total, rawFilter, visibleCount) {
   const counts = new Map();
   const senderCounts = new Map();
   for (const item of events) {
@@ -937,23 +998,164 @@ function renderRawSummary(events, total, filter) {
   }
   const senderChips = [...senderCounts.entries()]
     .sort((a, b) => b[1].count - a[1].count || a[1].label.localeCompare(b[1].label))
-    .map(([id, item]) => `<span class="raw-sender-summary raw-sender-${escapeHtml(safeClass(id))}">${escapeHtml(item.label)} ${escapeHtml(item.count)}</span>`)
+    .map(([id, item]) => renderRawFilterButton(
+      `sender:${id}`,
+      `${item.label} ${formatNumber(item.count)}`,
+      `raw-sender-summary raw-sender-${safeClass(id)}`,
+      rawFilter,
+    ))
     .join('');
   const typeChips = [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 6)
-    .map(([type, count]) => `<span>${escapeHtml(type)} ${escapeHtml(count)}</span>`)
+    .map(([type, count]) => renderRawFilterButton(
+      `type:${type}`,
+      `${type} ${formatNumber(count)}`,
+      'raw-type-summary',
+      rawFilter,
+    ))
     .join('');
+  const matchingText = rawFilter.active
+    ? `matching "${rawFilter.tokens.join(' ')}"`
+    : 'total';
+  const renderedText = visibleCount < events.length
+    ? `Rendered ${formatNumber(visibleCount)} of ${formatNumber(events.length)}`
+    : `Showing ${formatNumber(events.length)}`;
   return `
     <div class="raw-summary-count">
-      Showing <strong>${escapeHtml(formatNumber(events.length))}</strong> of <strong>${escapeHtml(formatNumber(total))}</strong> events
-      ${filter ? `<span class="muted">matching "${escapeHtml(filter)}"</span>` : ''}
+      <strong>${escapeHtml(renderedText)}</strong> events
+      <span class="muted">${escapeHtml(matchingText)} from ${escapeHtml(formatNumber(total))} raw events</span>
+      ${rawFilter.active ? '<button class="raw-clear-filter" type="button" data-raw-clear>Clear</button>' : ''}
     </div>
     <div class="raw-summary-groups">
       ${senderChips ? `<div class="raw-summary-senders">${senderChips}</div>` : ''}
       ${typeChips ? `<div class="raw-summary-types">${typeChips}</div>` : ''}
     </div>
   `;
+}
+
+function renderRawFilterButton(token, label, className, rawFilter) {
+  const active = rawFilter.tokenSet.has(token.toLowerCase());
+  return `
+    <button
+      class="${escapeHtml(className)} ${active ? 'active' : ''}"
+      type="button"
+      data-raw-filter="${escapeHtml(token)}"
+      title="Toggle ${escapeHtml(token)}"
+    >${escapeHtml(label)}</button>
+  `;
+}
+
+function parseRawFilter(value) {
+  const tokens = splitFilterTokens(value);
+  const fields = [];
+  const terms = [];
+
+  for (const token of tokens) {
+    const fieldMatch = /^([a-zA-Z][\w-]*):(.*)$/.exec(token);
+    if (fieldMatch) {
+      const field = normalizeRawFilterField(fieldMatch[1]);
+      const fieldValue = fieldMatch[2].trim().toLowerCase();
+      if (field && fieldValue) {
+        fields.push({ field, value: fieldValue });
+        continue;
+      }
+    }
+    const term = token.trim().toLowerCase();
+    if (term) terms.push(term);
+  }
+
+  return {
+    active: fields.length > 0 || terms.length > 0,
+    fields,
+    terms,
+    tokens,
+    tokenSet: new Set(tokens.map(token => token.toLowerCase())),
+  };
+}
+
+function splitFilterTokens(value) {
+  const tokens = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let match;
+  while ((match = re.exec(String(value || ''))) !== null) {
+    const token = (match[1] ?? match[2] ?? match[3] ?? '').trim();
+    if (token) tokens.push(token);
+  }
+  return tokens;
+}
+
+function normalizeRawFilterField(field) {
+  const key = String(field || '').toLowerCase().replaceAll('-', '_');
+  const aliases = {
+    call: 'call_id',
+    callid: 'call_id',
+    event: 'type',
+    event_type: 'type',
+    from: 'sender',
+    message: 'text',
+    name: 'tool',
+    payload_type: 'payload',
+    preview: 'text',
+    q: 'text',
+    source: 'sender',
+    tool_name: 'tool',
+  };
+  const normalized = aliases[key] || key;
+  return [
+    'call_id',
+    'index',
+    'json',
+    'label',
+    'payload',
+    'phase',
+    'role',
+    'sender',
+    'text',
+    'tool',
+    'type',
+  ].includes(normalized) ? normalized : null;
+}
+
+function rawMatchesFilter(item, rawFilter) {
+  return rawFilter.terms.every(term => item.search.includes(term)) &&
+    rawFilter.fields.every(({ field, value }) => rawFieldMatches(item, field, value));
+}
+
+function rawFieldMatches(item, field, value) {
+  if (field === 'json') return item.json.includes(value);
+  const payload = item.event.payload || {};
+  const values = {
+    call_id: [payload.call_id],
+    index: [String(item.index + 1)],
+    label: [item.label],
+    payload: [payload.type],
+    phase: [payload.phase],
+    role: [item.role],
+    sender: [item.sender.id, safeClass(item.sender.label)],
+    text: [previewEvent(item.event), item.preview],
+    tool: [payload.name],
+    type: [item.event.type],
+  }[field] || [];
+
+  if (['payload', 'role', 'sender', 'type'].includes(field)) {
+    return values.some(itemValue => String(itemValue || '').toLowerCase() === value);
+  }
+  return values.some(itemValue => String(itemValue || '').toLowerCase().includes(value));
+}
+
+function toggleRawFilterToken(token) {
+  const tokens = splitFilterTokens(els.rawFilter.value);
+  const normalized = token.toLowerCase();
+  const index = tokens.findIndex(item => item.toLowerCase() === normalized);
+  if (index >= 0) {
+    tokens.splice(index, 1);
+  } else {
+    tokens.push(token);
+  }
+  els.rawFilter.value = tokens.join(' ');
+  state.rawLimit = RAW_PAGE_SIZE;
+  renderRaw();
 }
 
 function renderRawEvent(item, open) {
@@ -1227,26 +1429,65 @@ function textContent(content) {
   return content.map(item => item?.text || item?.input_text || item?.output_text || '').filter(Boolean).join('\n');
 }
 
+function saveTabScroll() {
+  state.tabScroll[state.tab] = els.detail.scrollTop;
+}
+
+function switchTab(nextTab) {
+  if (!nextTab || nextTab === state.tab) return;
+  saveTabScroll();
+  state.tab = nextTab;
+  document.querySelectorAll('.tab').forEach(tab => {
+    const active = tab.dataset.tab === state.tab;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  els.conversationTab.classList.toggle('hidden', state.tab !== 'conversation');
+  els.timelineTab.classList.toggle('hidden', state.tab !== 'timeline');
+  els.lastResponseTab.classList.toggle('hidden', state.tab !== 'last-response');
+  els.rawTab.classList.toggle('hidden', state.tab !== 'raw');
+  requestAnimationFrame(() => {
+    els.detail.scrollTop = state.tabScroll[state.tab] || 0;
+  });
+}
+
 els.sessions.addEventListener('click', event => {
   const button = event.target.closest('.session');
   if (button) selectSession(button.dataset.id).catch(showError);
 });
 
+els.sessionFilter.addEventListener('input', renderSessions);
 els.refresh.addEventListener('click', () => loadSessions().catch(showError));
 els.conversationFilter.addEventListener('input', renderConversation);
 els.conversationTools.addEventListener('change', renderConversation);
 els.conversationInstructions.addEventListener('change', renderConversation);
 els.conversationCollapse.addEventListener('change', renderConversation);
-els.rawFilter.addEventListener('input', renderRaw);
+els.rawFilter.addEventListener('input', () => {
+  state.rawLimit = RAW_PAGE_SIZE;
+  renderRaw();
+});
+els.rawSummary.addEventListener('click', event => {
+  const filterButton = event.target.closest('[data-raw-filter]');
+  if (filterButton) {
+    toggleRawFilterToken(filterButton.dataset.rawFilter);
+    return;
+  }
+  const clearButton = event.target.closest('[data-raw-clear]');
+  if (clearButton) {
+    els.rawFilter.value = '';
+    state.rawLimit = RAW_PAGE_SIZE;
+    renderRaw();
+  }
+});
+els.raw.addEventListener('click', event => {
+  if (!event.target.closest('[data-raw-more]')) return;
+  state.rawLimit += RAW_PAGE_SIZE;
+  renderRaw();
+});
 
 document.querySelectorAll('.tab').forEach(button => {
   button.addEventListener('click', () => {
-    state.tab = button.dataset.tab;
-    document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab === button));
-    els.conversationTab.classList.toggle('hidden', state.tab !== 'conversation');
-    els.timelineTab.classList.toggle('hidden', state.tab !== 'timeline');
-    els.lastResponseTab.classList.toggle('hidden', state.tab !== 'last-response');
-    els.rawTab.classList.toggle('hidden', state.tab !== 'raw');
+    switchTab(button.dataset.tab);
   });
 });
 

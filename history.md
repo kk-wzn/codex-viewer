@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+  * feat(raw-events): Add structured raw-event filters, clickable sender/type chips, and progressive rendering for long raw streams.
+  * feat(viewer): Add session search and sticky per-tab scroll restoration.
+
 ## 0.1.0 (2026-05-14)
 
   * feat(viewer): Add the initial local Codex session viewer with session metadata, timeline, conversation, last-response, tool usage, token usage, and live rollout updates.

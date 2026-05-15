@@ -53,7 +53,10 @@ codex-viewer --version
 - 工具使用与角色分布的汇总信息
 - 从最终回复事件中提取「最近一次回复」
 - 解析后的时间线
-- 可读性更强的原始 rollout JSON 事件，支持过滤、按发送人/来源标识、事件类型汇总，以及展开查看格式化 payload
+- 可读性更强的原始 rollout JSON 事件，支持 `sender:tool`、`type:response_item`、`tool:exec_command`、`call_id:...` 等结构化过滤
+- 原始事件的发送人/事件类型 chips 可点击筛选，长事件流支持渐进渲染，并可展开查看格式化 payload
+- 支持按标题、路径、模型、分支、来源和时间搜索会话
+- 视图 tab 支持吸顶和独立滚动位置恢复
 - 选中的 rollout 文件支持实时追加更新
 - 当视图已滚动到底部时支持粘性实时滚动
 

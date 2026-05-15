@@ -53,7 +53,10 @@ This first version focuses on Codex-native viewing:
 - tool usage and role distribution summaries
 - "Last Response" extraction from final-answer events
 - parsed timeline
-- readable raw rollout JSON events with filtering, per-sender/source badges, event-type summaries, and expandable formatted payloads
+- readable raw rollout JSON events with structured filters such as `sender:tool`, `type:response_item`, `tool:exec_command`, and `call_id:...`
+- clickable raw-event sender/type chips, progressive rendering for long raw streams, and expandable formatted payloads
+- session search by title, path, model, branch, source, and timestamp
+- sticky view tabs with per-tab scroll restoration
 - live append updates for the selected rollout file
 - sticky live scrolling when the viewer is already at the bottom
 
