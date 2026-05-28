@@ -9,13 +9,25 @@ const state = {
   conversation: [],
   eventSource: null,
   tab: 'conversation',
+  tabScroll: {},
+  rawLimit: 200,
+  conversationMatchIndex: 0,
+  timelineQuery: '',
+  timelineKind: 'all',
 };
+
+const RAW_PAGE_SIZE = 200;
+const BACK_TO_TOP_THRESHOLD = 420;
 
 const els = {
   codexHome: document.getElementById('codex-home'),
   version: document.getElementById('app-version'),
   refresh: document.getElementById('refresh-button'),
+  refreshStatus: document.getElementById('refresh-status'),
   count: document.getElementById('session-count'),
+  sessionFilter: document.getElementById('session-filter'),
+  sessionClear: document.getElementById('session-clear'),
+  sessionFilterNote: document.getElementById('session-filter-note'),
   sessions: document.getElementById('sessions'),
   empty: document.getElementById('empty'),
   detail: document.getElementById('detail'),
@@ -27,16 +39,27 @@ const els = {
   conversation: document.getElementById('conversation'),
   conversationTab: document.getElementById('conversation-tab'),
   conversationFilter: document.getElementById('conversation-filter'),
+  conversationSearchStatus: document.getElementById('conversation-search-status'),
+  conversationPrevMatch: document.getElementById('conversation-prev-match'),
+  conversationNextMatch: document.getElementById('conversation-next-match'),
   conversationTools: document.getElementById('conversation-tools'),
   conversationInstructions: document.getElementById('conversation-instructions'),
   conversationCollapse: document.getElementById('conversation-collapse'),
+  conversationExpandFailed: document.getElementById('conversation-expand-failed'),
   timeline: document.getElementById('timeline-tab'),
+  timelineFilter: document.getElementById('timeline-filter'),
+  timelineKindFilter: document.getElementById('timeline-kind-filter'),
+  timelineSummary: document.getElementById('timeline-summary'),
+  timelineKindChips: document.getElementById('timeline-kind-chips'),
+  timelineList: document.getElementById('timeline-list'),
   lastResponseTab: document.getElementById('last-response-tab'),
   raw: document.getElementById('raw-events'),
   rawFilter: document.getElementById('raw-filter'),
+  rawBuilder: document.getElementById('raw-builder'),
   rawSummary: document.getElementById('raw-summary'),
   rawTab: document.getElementById('raw-tab'),
   timelineTab: document.getElementById('timeline-tab'),
+  backToTop: document.getElementById('back-to-top'),
 };
 
 function fmtDate(value) {
@@ -71,18 +94,53 @@ async function loadHealth() {
   if (data.version) els.version.textContent = `v${data.version}`;
 }
 
-async function loadSessions() {
+async function loadSessions({ refreshSelected = false } = {}) {
   const data = await fetchJson('/api/sessions?limit=200');
   state.sessions = data.sessions || [];
-  els.count.textContent = String(state.sessions.length);
   renderSessions();
-  if (!state.selectedId && state.sessions.length > 0) {
-    selectSession(state.sessions[0].id);
+
+  const selectedExists = state.selectedId && state.sessions.some(session => session.id === state.selectedId);
+  if (refreshSelected && selectedExists) {
+    await loadSelectedSession(state.selectedId, { resetView: false });
+  } else if (!state.selectedId && state.sessions.length > 0) {
+    await selectSession(state.sessions[0].id);
   }
 }
 
 function renderSessions() {
-  els.sessions.innerHTML = state.sessions.map(session => `
+  const filter = els.sessionFilter.value.trim().toLowerCase();
+  const sessions = filter
+    ? state.sessions.filter(session => sessionSearchText(session).includes(filter))
+    : state.sessions;
+  const selectedSession = state.sessions.find(session => session.id === state.selectedId);
+  const selectedVisible = !state.selectedId || sessions.some(session => session.id === state.selectedId);
+  els.count.textContent = filter
+    ? `${formatNumber(sessions.length)} / ${formatNumber(state.sessions.length)}`
+    : String(state.sessions.length);
+  els.sessionClear.classList.toggle('visible', Boolean(filter));
+  els.sessionClear.disabled = !filter;
+  if (filter && selectedSession && !selectedVisible) {
+    els.sessionFilterNote.classList.remove('hidden');
+    els.sessionFilterNote.innerHTML = `
+      Current session hidden by search:
+      <button type="button" data-clear-session-filter>${escapeHtml(sessionName(selectedSession))}</button>
+    `;
+  } else {
+    els.sessionFilterNote.classList.add('hidden');
+    els.sessionFilterNote.innerHTML = '';
+  }
+
+  if (sessions.length === 0) {
+    els.sessions.innerHTML = `
+      <div class="session-empty">
+        No sessions match this search.
+        ${filter ? '<button type="button" data-clear-session-filter>Clear search</button>' : ''}
+      </div>
+    `;
+    return;
+  }
+
+  els.sessions.innerHTML = sessions.map(session => `
     <button class="session ${session.id === state.selectedId ? 'active' : ''}" data-id="${escapeHtml(session.id)}">
       <span class="session-title">${escapeHtml(sessionName(session))}</span>
       <span class="session-line muted">
@@ -96,8 +154,37 @@ function renderSessions() {
   `).join('');
 }
 
+function sessionSearchText(session) {
+  return [
+    session.id,
+    sessionName(session),
+    session.model,
+    session.modelProvider,
+    session.cwd,
+    session.rolloutPath,
+    session.gitBranch,
+    session.source,
+    fmtDate(session.updatedAt),
+    fmtDate(session.createdAt),
+  ].filter(Boolean).join('\n').toLowerCase();
+}
+
 async function selectSession(id) {
+  await loadSelectedSession(id, { resetView: true });
+}
+
+async function loadSelectedSession(id, { resetView }) {
   state.selectedId = id;
+  if (resetView) {
+    state.rawLimit = RAW_PAGE_SIZE;
+    state.tabScroll = {};
+    state.conversationMatchIndex = 0;
+    state.timelineQuery = '';
+    state.timelineKind = 'all';
+    els.conversationFilter.value = '';
+    els.timelineFilter.value = '';
+    els.rawFilter.value = '';
+  }
   renderSessions();
   closeEventSource();
   els.live.textContent = 'loading';
@@ -128,10 +215,12 @@ function renderDetail() {
     session.rolloutPath,
   ].filter(Boolean).join(' | ');
 
+  const latestUsage = latestTokenUsage(summary);
+  const tokenCount = latestUsage?.total_tokens ?? session.tokensUsed ?? 0;
   els.stats.innerHTML = [
     ['Events', summary.eventCount],
     ['Timeline', state.timeline.length],
-    ['Tokens', formatNumber(session.tokensUsed || 0)],
+    ['Tokens', formatNumber(tokenCount)],
     ['Model', session.model || session.modelProvider || ''],
   ].map(([label, value]) => `
     <div class="stat">
@@ -146,11 +235,16 @@ function renderDetail() {
   renderLastResponse();
   renderRaw();
   if (shouldStick) requestAnimationFrame(scrollDetailToBottom);
+  requestAnimationFrame(updateBackToTop);
 }
 
 function formatNumber(value) {
   if (typeof value === 'number') return value.toLocaleString();
   return String(value ?? '');
+}
+
+function latestTokenUsage(summary) {
+  return summary?.latestTokenInfo?.total_token_usage || summary?.latestTokenInfo?.last_token_usage || null;
 }
 
 function isNearDetailBottom() {
@@ -163,12 +257,32 @@ function scrollDetailToBottom() {
   if (state.tab === 'timeline' || state.tab === 'conversation') {
     els.detail.scrollTop = els.detail.scrollHeight;
   }
+  updateBackToTop();
+}
+
+function updateBackToTop() {
+  const detailScroll = els.detail.scrollTop || 0;
+  const pageScroll = window.scrollY || document.documentElement.scrollTop || 0;
+  const visible = !els.detail.classList.contains('hidden') && Math.max(detailScroll, pageScroll) > BACK_TO_TOP_THRESHOLD;
+  els.backToTop.classList.toggle('visible', visible);
+  els.backToTop.disabled = !visible;
+  els.backToTop.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
+function scrollDetailToTop() {
+  state.tabScroll[state.tab] = 0;
+  if (els.detail.scrollHeight > els.detail.clientHeight) {
+    els.detail.scrollTo({ top: 0, behavior: 'smooth' });
+  } else {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  requestAnimationFrame(updateBackToTop);
 }
 
 function renderInsights() {
   const summary = state.summary;
   const goal = state.goal;
-  const latestUsage = summary.latestTokenInfo?.total_token_usage || summary.latestTokenInfo?.last_token_usage || null;
+  const latestUsage = latestTokenUsage(summary);
   const rate = summary.latestTokenInfo?.rate_limits || null;
   const tools = Object.entries(summary.toolCounts || {}).sort((a, b) => b[1] - a[1]);
   const roles = Object.entries(summary.roleCounts || {}).sort((a, b) => b[1] - a[1]);
@@ -267,32 +381,89 @@ function applyConversationFilters(items) {
 }
 
 function renderConversation() {
-  const paired = pairConversation(state.conversation);
-  const items = applyConversationFilters(paired);
+  const items = visibleConversationItems();
+  const query = els.conversationFilter.value.trim();
 
   if (items.length === 0) {
     els.conversation.innerHTML = '<div class="empty">No conversation items match this view.</div>';
+    updateConversationSearchState(0);
     return;
   }
 
   const collapseTools = els.conversationCollapse.checked;
-  els.conversation.innerHTML = items.map(item => renderItem(item, collapseTools)).join('');
+  els.conversation.innerHTML = items.map(item => renderItem(item, collapseTools, query)).join('');
+  updateConversationSearchState(items.length);
 }
 
-function renderItem(item, collapseTools) {
-  if (item.kind === 'tool') return renderToolBubble(item, collapseTools);
-  if (item.kind === 'tool-result') return renderOrphanResult(item, collapseTools);
-  return renderMessageBubble(item);
+function updateConversationSearchState(itemCount) {
+  const query = els.conversationFilter.value.trim();
+  const marks = Array.from(els.conversation.querySelectorAll('mark.search-hit'));
+  const hasMatches = marks.length > 0;
+  state.conversationMatchIndex = hasMatches
+    ? Math.min(Math.max(state.conversationMatchIndex, 0), marks.length - 1)
+    : 0;
+
+  els.conversationPrevMatch.disabled = !hasMatches;
+  els.conversationNextMatch.disabled = !hasMatches;
+  if (!query) {
+    els.conversationSearchStatus.textContent = `${formatNumber(itemCount)} items`;
+    clearConversationCurrentMatch();
+    return;
+  }
+  els.conversationSearchStatus.textContent = hasMatches
+    ? `${formatNumber(state.conversationMatchIndex + 1)} / ${formatNumber(marks.length)} matches in ${formatNumber(itemCount)} items`
+    : `0 matches in ${formatNumber(itemCount)} items`;
+  if (hasMatches) activateConversationMatch({ scroll: true });
 }
 
-function renderMessageBubble(item) {
+function clearConversationCurrentMatch() {
+  els.conversation.querySelectorAll('.search-hit-current').forEach(node => node.classList.remove('search-hit-current'));
+  els.conversation.querySelectorAll('.conversation-match-current').forEach(node => node.classList.remove('conversation-match-current'));
+}
+
+function activateConversationMatch({ scroll }) {
+  const marks = Array.from(els.conversation.querySelectorAll('mark.search-hit'));
+  if (marks.length === 0) return;
+  clearConversationCurrentMatch();
+  const mark = marks[state.conversationMatchIndex % marks.length];
+  mark.classList.add('search-hit-current');
+  const detail = mark.closest('details');
+  if (detail) detail.open = true;
+  const item = mark.closest('.bubble');
+  if (item) item.classList.add('conversation-match-current');
+  if (scroll) {
+    mark.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    updateBackToTop();
+  }
+}
+
+function moveConversationMatch(direction) {
+  const marks = els.conversation.querySelectorAll('mark.search-hit');
+  if (marks.length === 0) return;
+  state.conversationMatchIndex = (state.conversationMatchIndex + direction + marks.length) % marks.length;
+  els.conversationSearchStatus.textContent = `${formatNumber(state.conversationMatchIndex + 1)} / ${formatNumber(marks.length)} matches`;
+  activateConversationMatch({ scroll: true });
+}
+
+function visibleConversationItems() {
+  return applyConversationFilters(pairConversation(state.conversation));
+}
+
+function renderItem(item, collapseTools, query) {
+  if (item.kind === 'tool') return renderToolBubble(item, collapseTools, query);
+  if (item.kind === 'tool-result') return renderOrphanResult(item, collapseTools, query);
+  return renderMessageBubble(item, query);
+}
+
+function renderMessageBubble(item, query) {
   const roleLabel = `${item.role}${item.phase ? ` / ${item.phase}` : ''}`;
   const isAssistantOrUser = item.role === 'user' || item.role === 'assistant';
   const body = isAssistantOrUser
-    ? renderMarkdown(item.text || '')
-    : `<pre class="plain-text">${escapeHtml(item.text || '')}</pre>`;
+    ? highlightHtml(renderMarkdown(item.text || ''), query)
+    : `<pre class="plain-text">${highlightText(item.text || '', query)}</pre>`;
+  const key = conversationItemKey(item);
   return `
-    <article class="bubble ${escapeHtml(item.role)}">
+    <article class="bubble ${escapeHtml(item.role)}" id="conversation-${escapeHtml(key)}" data-conversation-key="${escapeHtml(key)}">
       <div class="bubble-meta">
         <span>${escapeHtml(roleLabel)}</span>
         <span>${escapeHtml(fmtDate(item.timestamp))}</span>
@@ -302,32 +473,38 @@ function renderMessageBubble(item) {
   `;
 }
 
-function renderOrphanResult(item, collapseTools) {
+function renderOrphanResult(item, collapseTools, query) {
   const title = `result ${item.callId || ''}`.trim();
+  const meta = toolResultMeta(item);
   return `
-    <details class="bubble tool-result" ${collapseTools ? '' : 'open'}>
+    <details class="bubble tool-result tool-${escapeHtml(meta.state)}" ${collapseTools ? '' : 'open'}>
       <summary class="tool-summary">
-        <span>${escapeHtml(title)}</span>
-        <span>${escapeHtml(fmtDate(item.timestamp))}</span>
+        <span>${highlightText(title, query)}</span>
+        <span class="tool-meta-right">
+          ${renderToolResultBadges(meta)}
+          <span>${escapeHtml(fmtDate(item.timestamp))}</span>
+        </span>
       </summary>
-      <div class="tool-body">${renderToolOutput(null, item)}</div>
+      <div class="tool-body">${renderToolOutput(null, item, query)}</div>
     </details>
   `;
 }
 
-function renderToolBubble(item, collapseTools) {
+function renderToolBubble(item, collapseTools, query) {
   const tool = item.toolName || 'tool';
   const renderer = TOOL_RENDERERS[tool] || renderGenericTool;
   const parsedInput = parseInput(item);
-  const head = renderer.head ? renderer.head(parsedInput, item) : `${tool}`;
-  const body = renderer.body ? renderer.body(parsedInput, item) : renderGenericTool.body(parsedInput, item);
-  const resultBody = renderToolOutput(tool, item.result);
+  const head = highlightHtml(renderer.head ? renderer.head(parsedInput, item) : escapeHtml(tool), query);
+  const body = highlightHtml(renderer.body ? renderer.body(parsedInput, item) : renderGenericTool.body(parsedInput, item), query);
+  const resultBody = renderToolOutput(tool, item.result, query);
+  const meta = toolResultMeta(item.result);
   const open = !collapseTools;
   return `
-    <details class="bubble tool tool-${escapeHtml(tool)}" ${open ? 'open' : ''}>
+    <details class="bubble tool tool-${escapeHtml(tool)} tool-${escapeHtml(meta.state)}" ${open ? 'open' : ''}>
       <summary class="tool-summary">
         <span class="tool-head">${head}</span>
         <span class="tool-meta-right">
+          ${renderToolResultBadges(meta)}
           ${item.callId ? `<span class="tool-callid">${escapeHtml(item.callId.slice(-8))}</span>` : ''}
           <span>${escapeHtml(fmtDate(item.timestamp))}</span>
         </span>
@@ -461,28 +638,59 @@ const renderGenericTool = {
   },
 };
 
-function renderToolOutput(toolName, result) {
+function renderToolOutput(toolName, result, query = '') {
   if (!result) return '';
   const text = typeof result.text === 'string' ? result.text : String(result.text ?? '');
   if (toolName === 'exec_command' || toolName === 'write_stdin') {
-    return `<pre class="code shell-output">${highlightExecOutput(text)}</pre>`;
+    return `<pre class="code shell-output">${highlightHtml(highlightExecOutput(text), query)}</pre>`;
   }
   if (toolName === 'apply_patch') {
     const ok = !/failed|error/i.test(text);
     const cls = ok ? 'ok' : 'fail';
-    return `<div class="patch-result ${cls}"><pre class="code">${escapeHtml(text)}</pre></div>`;
+    return `<div class="patch-result ${cls}"><pre class="code">${highlightText(text, query)}</pre></div>`;
   }
   if (toolName === 'update_plan' || toolName === 'update_goal' || toolName === 'get_goal') {
-    return `<pre class="code">${escapeHtml(text)}</pre>`;
+    return `<pre class="code">${highlightText(text, query)}</pre>`;
   }
   // Try to detect JSON
   const trimmed = text.trim();
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     try {
-      return `<pre class="code json">${escapeHtml(JSON.stringify(JSON.parse(trimmed), null, 2))}</pre>`;
+      return `<pre class="code json">${highlightText(JSON.stringify(JSON.parse(trimmed), null, 2), query)}</pre>`;
     } catch {}
   }
-  return `<pre class="code">${escapeHtml(text)}</pre>`;
+  return `<pre class="code">${highlightText(text, query)}</pre>`;
+}
+
+function toolResultMeta(result) {
+  if (!result) return { state: 'pending', badges: ['pending'] };
+  const text = typeof result.text === 'string' ? result.text : String(result.text ?? '');
+  const exitCodeMatch = /Process exited with code (\d+)/.exec(text);
+  const wallTimeMatch = /Wall time:\s*([^\n]+)/.exec(text);
+  const outputText = execOutputText(text);
+  const outputLines = outputText ? outputText.split('\n').filter(Boolean).length : 0;
+  const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : null;
+  const failed = exitCode != null
+    ? exitCode !== 0
+    : /timed out|failed|error/i.test(text);
+  const state = failed ? 'fail' : 'ok';
+  const badges = [];
+  if (exitCode != null) badges.push(`exit ${exitCode}`);
+  else badges.push(state);
+  if (wallTimeMatch) badges.push(wallTimeMatch[1].trim());
+  if (outputLines > 0) badges.push(`${formatNumber(outputLines)} lines`);
+  return { state, badges };
+}
+
+function execOutputText(text) {
+  const match = /\nOutput:\n([\s\S]*)$/.exec(text);
+  return match ? match[1].trim() : '';
+}
+
+function renderToolResultBadges(meta) {
+  return meta.badges.map(badge => `
+    <span class="tool-result-badge tool-result-${escapeHtml(meta.state)}">${escapeHtml(badge)}</span>
+  `).join('');
 }
 
 function planIcon(status) {
@@ -490,6 +698,46 @@ function planIcon(status) {
   if (status === 'in_progress') return '◐';
   if (status === 'cancelled') return '✗';
   return '○';
+}
+
+function conversationItemKey(item) {
+  return [
+    item.kind,
+    item.role,
+    item.timestamp,
+    item.callId || '',
+    hashText(item.text || ''),
+  ].join('-').replace(/[^a-zA-Z0-9_-]+/g, '-');
+}
+
+function hashText(text) {
+  let hash = 0;
+  const value = String(text || '');
+  for (let i = 0; i < value.length; i++) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function highlightText(text, query) {
+  const escaped = escapeHtml(text);
+  return highlightHtml(escaped, query);
+}
+
+function highlightHtml(html, query) {
+  const term = String(query || '').trim();
+  if (!term) return html;
+  const needle = escapeHtml(term);
+  if (!needle) return html;
+  const re = new RegExp(escapeRegExp(needle), 'gi');
+  return String(html).split(/(<[^>]+>)/g).map(part => {
+    if (part.startsWith('<')) return part;
+    return part.replace(re, match => `<mark class="search-hit">${match}</mark>`);
+  }).join('');
+}
+
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // --- apply_patch parsing ----------------------------------------------------
@@ -679,7 +927,7 @@ function renderInline(text) {
   const tokens = [];
   let placeholderIdx = 0;
   let working = text.replace(/`([^`\n]+)`/g, (_, code) => {
-    const key = ` CODE${placeholderIdx++} `;
+    const key = `__CODE${placeholderIdx++}__`;
     tokens.push({ key, html: `<code class="md-code-inline">${escapeHtml(code)}</code>` });
     return key;
   });
@@ -858,20 +1106,148 @@ function highlightExecOutput(text) {
 // ---------------------------------------------------------------------------
 
 function renderTimeline() {
+  if (els.timelineFilter.value !== state.timelineQuery) els.timelineFilter.value = state.timelineQuery;
+  renderTimelineControls();
   if (state.timeline.length === 0) {
-    els.timeline.innerHTML = '<div class="empty">No conversation events found in this rollout.</div>';
+    els.timelineList.innerHTML = '<div class="empty">No conversation events found in this rollout.</div>';
     return;
   }
 
-  els.timeline.innerHTML = state.timeline.map(item => `
-    <article class="event">
+  const query = state.timelineQuery.trim().toLowerCase();
+  const kindFilter = state.timelineKind;
+  const allItems = state.timeline.map((item, position) => {
+    const kind = timelineKind(item);
+    return {
+      item,
+      position,
+      rawIndex: timelineRawIndex(item, position),
+      kind,
+      conversationKey: conversationKeyForTimeline(item),
+    };
+  });
+  const visibleItems = allItems.filter(entry => {
+    if (kindFilter !== 'all' && entry.kind.id !== kindFilter) return false;
+    if (!query) return true;
+    return timelineSearchText(entry.item, entry.kind).includes(query);
+  });
+
+  els.timelineSummary.textContent = `${formatNumber(visibleItems.length)} / ${formatNumber(allItems.length)} events`;
+  const blocks = [];
+  let currentGroup = '';
+  for (const entry of visibleItems) {
+    const item = entry.item;
+    const group = timelineGroup(item.timestamp);
+    if (group !== currentGroup) {
+      currentGroup = group;
+      blocks.push(`<div class="timeline-group">${escapeHtml(group)}</div>`);
+    }
+    const rawLabel = entry.rawIndex >= 0 ? `Raw #${entry.rawIndex + 1}` : 'Raw';
+    blocks.push(`
+    <article class="event timeline-event timeline-${escapeHtml(entry.kind.id)}" id="timeline-${escapeHtml(timelineItemKey(item, entry.position))}">
       <div class="event-head">
-        <span><span class="event-role">${escapeHtml(item.role)}</span> ${escapeHtml(item.type)}</span>
+        <span>
+          <span class="event-role">${escapeHtml(item.role)}</span>
+          ${escapeHtml(item.type)}
+          <span class="timeline-badge">${escapeHtml(entry.kind.label)}</span>
+        </span>
         <span>${escapeHtml(fmtDate(item.timestamp))}</span>
       </div>
-      <div class="event-body">${escapeHtml(item.preview || '')}</div>
+      <div class="event-body">${highlightText(item.preview || '', state.timelineQuery)}</div>
+      <div class="timeline-actions">
+        <button type="button" data-jump-conversation="${escapeHtml(entry.conversationKey)}" ${entry.conversationKey ? '' : 'disabled'}>Conversation</button>
+        <button type="button" data-jump-raw="${escapeHtml(entry.rawIndex)}" ${entry.rawIndex >= 0 ? '' : 'disabled'}>${escapeHtml(rawLabel)}</button>
+        ${item.payload?.call_id ? `<button type="button" data-raw-call-id="${escapeHtml(item.payload.call_id)}">call_id</button>` : ''}
+      </div>
     </article>
+    `);
+  }
+  els.timelineList.innerHTML = blocks.length ? blocks.join('') : '<div class="empty">No timeline events match this filter.</div>';
+}
+
+function renderTimelineControls() {
+  const entries = state.timeline.map(item => timelineKind(item));
+  const counts = new Map();
+  for (const kind of entries) {
+    counts.set(kind.id, { label: kind.label, count: (counts.get(kind.id)?.count || 0) + 1 });
+  }
+  if (state.timelineKind !== 'all' && !counts.has(state.timelineKind)) state.timelineKind = 'all';
+  const options = [['all', `All ${formatNumber(state.timeline.length)}`], ...[...counts.entries()]
+    .sort((a, b) => b[1].count - a[1].count || a[1].label.localeCompare(b[1].label))
+    .map(([id, item]) => [id, `${item.label} ${formatNumber(item.count)}`])];
+  els.timelineKindFilter.innerHTML = options.map(([id, label]) => `
+    <option value="${escapeHtml(id)}" ${id === state.timelineKind ? 'selected' : ''}>${escapeHtml(label)}</option>
   `).join('');
+  els.timelineKindChips.innerHTML = options.slice(0, 9).map(([id, label]) => `
+    <button type="button" data-timeline-kind="${escapeHtml(id)}" class="${id === state.timelineKind ? 'active' : ''}">
+      ${escapeHtml(label)}
+    </button>
+  `).join('');
+}
+
+function timelineSearchText(item, kind) {
+  const payload = item.payload || {};
+  return [
+    item.timestamp,
+    item.type,
+    item.role,
+    item.preview,
+    kind.id,
+    kind.label,
+    payload.type,
+    payload.phase,
+    payload.name,
+    payload.call_id,
+  ].filter(Boolean).join('\n').toLowerCase();
+}
+
+function timelineItemKey(item, position) {
+  return [
+    item.index ?? position,
+    item.role,
+    item.type,
+    item.timestamp,
+    item.payload?.call_id || '',
+    hashText(item.preview || ''),
+  ].join('-').replace(/[^a-zA-Z0-9_-]+/g, '-');
+}
+
+function timelineRawIndex(item, position) {
+  if (Number.isInteger(item.index)) return item.index;
+  const found = state.events.findIndex(event => {
+    if (event.timestamp !== item.timestamp || event.type !== item.type) return false;
+    const payload = event.payload || {};
+    if (item.payload?.call_id && payload.call_id !== item.payload.call_id) return false;
+    return previewEvent(event) === item.preview || payload.type === item.payload?.type;
+  });
+  return found >= 0 ? found : position;
+}
+
+function conversationKeyForTimeline(item) {
+  const payload = item.payload || {};
+  const role = String(item.role || '').toLowerCase();
+  const items = pairConversation(state.conversation);
+  if (payload.call_id) {
+    const match = items.find(candidate => {
+      if (candidate.callId !== payload.call_id) return false;
+      if (role === 'tool-result') return candidate.kind === 'tool' || candidate.kind === 'tool-result';
+      return candidate.kind === 'tool';
+    });
+    if (match) return conversationItemKey(match);
+  }
+  for (let i = items.length - 1; i >= 0; i--) {
+    const candidate = items[i];
+    if (candidate.kind !== 'message') continue;
+    if (!sameTimelineRole(candidate.role, role)) continue;
+    if (sameResponseText(candidate.text, item.preview)) return conversationItemKey(candidate);
+  }
+  return '';
+}
+
+function sameTimelineRole(candidateRole, timelineRole) {
+  if (candidateRole === timelineRole) return true;
+  if (candidateRole === 'assistant' && timelineRole === 'agent_message') return true;
+  if (candidateRole === 'user' && timelineRole === 'user_message') return true;
+  return false;
 }
 
 function renderLastResponse() {
@@ -880,52 +1256,200 @@ function renderLastResponse() {
     els.lastResponseTab.innerHTML = '<div class="empty">No final response found in this rollout.</div>';
     return;
   }
+  const key = lastResponseConversationKey();
+  const responseParts = splitAppDirectives(item.preview || '');
   els.lastResponseTab.innerHTML = `
+    <div class="last-response-actions">
+      <button type="button" data-copy-last-response>Copy response</button>
+      <button type="button" data-jump-last-response ${key ? '' : 'disabled'}>Jump to conversation</button>
+    </div>
     <article class="event">
       <div class="event-head">
         <span><span class="event-role">${escapeHtml(item.role)}</span> Last Response</span>
         <span>${escapeHtml(fmtDate(item.timestamp))}</span>
       </div>
-      <div class="event-body markdown">${renderMarkdown(item.preview || '')}</div>
+      <div class="event-body markdown">${renderMarkdown(responseParts.text || '')}</div>
+      ${responseParts.directives.length ? `
+        <details class="directive-details">
+          <summary>${escapeHtml(formatNumber(responseParts.directives.length))} app directives hidden</summary>
+          <pre class="code">${escapeHtml(responseParts.directives.join('\n'))}</pre>
+        </details>
+      ` : ''}
     </article>
   `;
 }
 
-function renderRaw() {
-  const filter = els.rawFilter.value.trim().toLowerCase();
-  const rawEvents = state.events.map((event, index) => {
-    const role = rawEventRole(event);
-    const sender = rawEventSender(event, role);
-    const label = rawEventLabel(event);
-    const preview = rawEventPreview(event);
-    const search = [
-      String(index + 1),
-      event.timestamp,
-      event.type,
-      role,
-      sender.id,
-      sender.label,
-      label,
-      preview,
-      JSON.stringify(event),
-    ].filter(Boolean).join('\n').toLowerCase();
-    return { event, index, role, sender, label, preview, search };
-  });
-  const events = filter
-    ? rawEvents.filter(item => item.search.includes(filter))
-    : rawEvents;
+function splitAppDirectives(text) {
+  const directives = [];
+  const cleaned = String(text || '').replace(/::[a-zA-Z][\w-]*\{[^}]*\}/g, match => {
+    directives.push(match);
+    return '';
+  }).replace(/\n{3,}/g, '\n\n').trim();
+  return { text: cleaned, directives };
+}
 
-  els.rawSummary.innerHTML = renderRawSummary(events, rawEvents.length, filter);
+function timelineGroup(timestamp) {
+  if (!timestamp) return 'Unknown time';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return String(timestamp);
+  return date.toLocaleDateString();
+}
+
+function timelineKind(item) {
+  const payload = item.payload || {};
+  const preview = item.preview || '';
+  const role = String(item.role || '').toLowerCase();
+  const toolName = payload.name || '';
+  if (role === 'user' || role === 'user_message') return { id: 'user', label: 'User prompt' };
+  if ((role === 'assistant' || role === 'agent_message') && payload.phase === 'final_answer') {
+    return { id: 'final', label: 'Final answer' };
+  }
+  if ((role === 'tool-result' || payload.type === 'function_call_output') && /Process exited with code [1-9]|timed out|failed|error/i.test(preview)) {
+    return { id: 'tool-error', label: 'Tool error' };
+  }
+  if (toolName === 'apply_patch') return { id: 'patch', label: 'Patch' };
+  if (toolName === 'exec_command') {
+    return /\bgit\s+push\b/.test(preview) ? { id: 'git-push', label: 'Git push' } : { id: 'shell', label: 'Shell' };
+  }
+  if (role === 'tool') return { id: 'tool', label: toolName || 'Tool call' };
+  if (role === 'tool-result') return { id: 'tool-result', label: 'Tool result' };
+  return { id: 'event', label: payload.phase || payload.type || 'Event' };
+}
+
+function lastResponseConversationKey() {
+  const item = state.summary?.lastResponse;
+  if (!item) return '';
+  const items = pairConversation(state.conversation);
+  for (let i = items.length - 1; i >= 0; i--) {
+    const candidate = items[i];
+    if (candidate.kind !== 'message') continue;
+    const assistantRole = candidate.role === 'assistant' || candidate.role === 'agent_message';
+    if (!assistantRole) continue;
+    if (sameResponseText(candidate.text, item.preview)) {
+      return conversationItemKey(candidate);
+    }
+  }
+  return '';
+}
+
+function sameResponseText(a, b) {
+  const left = comparableText(a);
+  const right = comparableText(b);
+  if (!left || !right) return false;
+  return left === right || left.includes(right) || right.includes(left);
+}
+
+function comparableText(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function renderRaw() {
+  const rawFilter = parseRawFilter(els.rawFilter.value);
+  const rawEvents = state.events.map(createRawEventItem);
+  els.rawBuilder.innerHTML = renderRawBuilder(rawEvents, rawFilter);
+  const events = rawFilter.active
+    ? rawEvents.filter(item => rawMatchesFilter(item, rawFilter))
+    : rawEvents;
+  const visibleEvents = events.slice(0, state.rawLimit);
+
+  els.rawSummary.innerHTML = renderRawSummary(events, rawEvents.length, rawFilter, visibleEvents.length);
   if (events.length === 0) {
     els.raw.innerHTML = '<div class="empty">No raw events match this filter.</div>';
     return;
   }
 
-  const autoOpen = events.length <= 3;
-  els.raw.innerHTML = events.map(item => renderRawEvent(item, autoOpen)).join('');
+  const autoOpen = visibleEvents.length <= 3;
+  const moreCount = events.length - visibleEvents.length;
+  const moreHtml = moreCount > 0 ? `
+    <div class="raw-more">
+      <button class="raw-more-button" type="button" data-raw-more>
+        Show next ${escapeHtml(formatNumber(Math.min(RAW_PAGE_SIZE, moreCount)))} events
+      </button>
+      <span class="muted">${escapeHtml(formatNumber(moreCount))} still hidden for performance</span>
+    </div>
+  ` : '';
+  els.raw.innerHTML = `${visibleEvents.map(item => renderRawEvent(item, autoOpen)).join('')}${moreHtml}`;
 }
 
-function renderRawSummary(events, total, filter) {
+function renderRawBuilder(rawEvents, rawFilter) {
+  const senders = uniqueRawOptions(rawEvents, item => [item.sender.id, item.sender.label]);
+  const types = uniqueRawOptions(rawEvents, item => [item.event.type, item.event.type]);
+  const tools = uniqueRawOptions(rawEvents, item => item.event.payload?.name ? [item.event.payload.name, item.event.payload.name] : null);
+  return `
+    <div class="raw-builder-row">
+      ${renderRawBuilderSelect('sender', 'Sender', senders, rawFilter)}
+      ${renderRawBuilderSelect('type', 'Type', types, rawFilter)}
+      ${renderRawBuilderSelect('tool', 'Tool', tools, rawFilter)}
+      <label class="raw-jump">
+        <span>Find</span>
+        <input id="raw-jump-input" placeholder="# or call_id" />
+        <button type="button" data-raw-jump>Go</button>
+      </label>
+    </div>
+  `;
+}
+
+function uniqueRawOptions(rawEvents, picker) {
+  const map = new Map();
+  for (const item of rawEvents) {
+    const picked = picker(item);
+    if (!picked || !picked[0]) continue;
+    const [value, label] = picked;
+    map.set(String(value), String(label));
+  }
+  return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+}
+
+function renderRawBuilderSelect(field, label, options, rawFilter) {
+  const active = rawFilter.fields.find(item => item.field === field)?.value || '';
+  return `
+    <label>
+      <span>${escapeHtml(label)}</span>
+      <select data-raw-build-field="${escapeHtml(field)}">
+        <option value="">Any</option>
+        ${options.map(([value, optionLabel]) => `
+          <option value="${escapeHtml(value)}" ${String(value).toLowerCase() === active ? 'selected' : ''}>${escapeHtml(optionLabel)}</option>
+        `).join('')}
+      </select>
+    </label>
+  `;
+}
+
+function createRawEventItem(event, index) {
+  const role = rawEventRole(event);
+  const sender = rawEventSender(event, role);
+  const label = rawEventLabel(event);
+  const preview = rawEventPreview(event);
+  const payload = event.payload || {};
+  const directPreview = previewEvent(event);
+  const json = JSON.stringify(event);
+  const search = [
+    String(index + 1),
+    event.timestamp,
+    event.type,
+    role,
+    sender.id,
+    sender.label,
+    payload.type,
+    payload.phase,
+    payload.name,
+    payload.call_id,
+    label,
+    directPreview,
+  ].filter(Boolean).join('\n').toLowerCase();
+  return {
+    event,
+    index,
+    role,
+    sender,
+    label,
+    preview,
+    search,
+    json: json.toLowerCase(),
+  };
+}
+
+function renderRawSummary(events, total, rawFilter, visibleCount) {
   const counts = new Map();
   const senderCounts = new Map();
   for (const item of events) {
@@ -937,17 +1461,34 @@ function renderRawSummary(events, total, filter) {
   }
   const senderChips = [...senderCounts.entries()]
     .sort((a, b) => b[1].count - a[1].count || a[1].label.localeCompare(b[1].label))
-    .map(([id, item]) => `<span class="raw-sender-summary raw-sender-${escapeHtml(safeClass(id))}">${escapeHtml(item.label)} ${escapeHtml(item.count)}</span>`)
+    .map(([id, item]) => renderRawFilterButton(
+      `sender:${id}`,
+      `${item.label} ${formatNumber(item.count)}`,
+      `raw-sender-summary raw-sender-${safeClass(id)}`,
+      rawFilter,
+    ))
     .join('');
   const typeChips = [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 6)
-    .map(([type, count]) => `<span>${escapeHtml(type)} ${escapeHtml(count)}</span>`)
+    .map(([type, count]) => renderRawFilterButton(
+      `type:${type}`,
+      `${type} ${formatNumber(count)}`,
+      'raw-type-summary',
+      rawFilter,
+    ))
     .join('');
+  const matchingText = rawFilter.active
+    ? `matching "${rawFilter.tokens.join(' ')}"`
+    : 'total';
+  const renderedText = visibleCount < events.length
+    ? `Rendered ${formatNumber(visibleCount)} of ${formatNumber(events.length)}`
+    : `Showing ${formatNumber(events.length)}`;
   return `
     <div class="raw-summary-count">
-      Showing <strong>${escapeHtml(formatNumber(events.length))}</strong> of <strong>${escapeHtml(formatNumber(total))}</strong> events
-      ${filter ? `<span class="muted">matching "${escapeHtml(filter)}"</span>` : ''}
+      <strong>${escapeHtml(renderedText)}</strong> events
+      <span class="muted">${escapeHtml(matchingText)} from ${escapeHtml(formatNumber(total))} raw events</span>
+      ${rawFilter.active ? '<button class="raw-clear-filter" type="button" data-raw-clear>Clear</button>' : ''}
     </div>
     <div class="raw-summary-groups">
       ${senderChips ? `<div class="raw-summary-senders">${senderChips}</div>` : ''}
@@ -956,13 +1497,197 @@ function renderRawSummary(events, total, filter) {
   `;
 }
 
+function renderRawFilterButton(token, label, className, rawFilter) {
+  const active = rawFilter.tokenSet.has(token.toLowerCase());
+  return `
+    <button
+      class="${escapeHtml(className)} ${active ? 'active' : ''}"
+      type="button"
+      data-raw-filter="${escapeHtml(token)}"
+      title="Toggle ${escapeHtml(token)}"
+    >${escapeHtml(label)}</button>
+  `;
+}
+
+function parseRawFilter(value) {
+  const tokens = splitFilterTokens(value);
+  const fields = [];
+  const terms = [];
+
+  for (const token of tokens) {
+    const fieldMatch = /^([a-zA-Z][\w-]*):(.*)$/.exec(token);
+    if (fieldMatch) {
+      const field = normalizeRawFilterField(fieldMatch[1]);
+      const fieldValue = fieldMatch[2].trim().toLowerCase();
+      if (field && fieldValue) {
+        fields.push({ field, value: fieldValue });
+        continue;
+      }
+    }
+    const term = token.trim().toLowerCase();
+    if (term) terms.push(term);
+  }
+
+  return {
+    active: fields.length > 0 || terms.length > 0,
+    fields,
+    terms,
+    tokens,
+    tokenSet: new Set(tokens.map(token => token.toLowerCase())),
+  };
+}
+
+function splitFilterTokens(value) {
+  const tokens = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let match;
+  while ((match = re.exec(String(value || ''))) !== null) {
+    const token = (match[1] ?? match[2] ?? match[3] ?? '').trim();
+    if (token) tokens.push(token);
+  }
+  return tokens;
+}
+
+function normalizeRawFilterField(field) {
+  const key = String(field || '').toLowerCase().replaceAll('-', '_');
+  const aliases = {
+    call: 'call_id',
+    callid: 'call_id',
+    event: 'type',
+    event_type: 'type',
+    from: 'sender',
+    message: 'text',
+    name: 'tool',
+    payload_type: 'payload',
+    preview: 'text',
+    q: 'text',
+    source: 'sender',
+    tool_name: 'tool',
+  };
+  const normalized = aliases[key] || key;
+  return [
+    'call_id',
+    'index',
+    'json',
+    'label',
+    'payload',
+    'phase',
+    'role',
+    'sender',
+    'text',
+    'tool',
+    'type',
+  ].includes(normalized) ? normalized : null;
+}
+
+function rawMatchesFilter(item, rawFilter) {
+  return rawFilter.terms.every(term => item.search.includes(term)) &&
+    rawFilter.fields.every(({ field, value }) => rawFieldMatches(item, field, value));
+}
+
+function rawFieldMatches(item, field, value) {
+  if (field === 'json') return item.json.includes(value);
+  const payload = item.event.payload || {};
+  const values = {
+    call_id: [payload.call_id],
+    index: [String(item.index + 1)],
+    label: [item.label],
+    payload: [payload.type],
+    phase: [payload.phase],
+    role: [item.role],
+    sender: [item.sender.id, safeClass(item.sender.label)],
+    text: [previewEvent(item.event), item.preview],
+    tool: [payload.name],
+    type: [item.event.type],
+  }[field] || [];
+
+  if (['index', 'payload', 'role', 'sender', 'type'].includes(field)) {
+    return values.some(itemValue => String(itemValue || '').toLowerCase() === value);
+  }
+  return values.some(itemValue => String(itemValue || '').toLowerCase().includes(value));
+}
+
+function toggleRawFilterToken(token) {
+  const tokens = splitFilterTokens(els.rawFilter.value);
+  const normalized = token.toLowerCase();
+  const index = tokens.findIndex(item => item.toLowerCase() === normalized);
+  if (index >= 0) {
+    tokens.splice(index, 1);
+  } else {
+    tokens.push(token);
+  }
+  els.rawFilter.value = tokens.join(' ');
+  state.rawLimit = RAW_PAGE_SIZE;
+  renderRaw();
+}
+
+function setRawFilterField(field, value) {
+  const normalizedField = normalizeRawFilterField(field);
+  if (!normalizedField) return;
+  const tokens = splitFilterTokens(els.rawFilter.value)
+    .filter(token => !token.toLowerCase().startsWith(`${normalizedField}:`));
+  if (value) tokens.push(`${normalizedField}:${quoteFilterValue(value)}`);
+  els.rawFilter.value = tokens.join(' ');
+  state.rawLimit = RAW_PAGE_SIZE;
+  renderRaw();
+}
+
+function quoteFilterValue(value) {
+  const text = String(value || '').trim();
+  return /\s/.test(text) ? `"${text.replaceAll('"', '\\"')}"` : text;
+}
+
+function filterRawByCallId(callId) {
+  if (!callId) return;
+  els.rawFilter.value = `call_id:${quoteFilterValue(callId)}`;
+  state.rawLimit = RAW_PAGE_SIZE;
+  renderRaw();
+  requestAnimationFrame(() => {
+    const first = els.raw.querySelector('.raw-event');
+    if (first) {
+      first.open = true;
+      first.classList.add('raw-event-target');
+      first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      setTimeout(() => first.classList.remove('raw-event-target'), 1800);
+    }
+  });
+}
+
+function jumpToRawEvent(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= state.events.length) return;
+  switchTab('raw');
+  els.rawFilter.value = `index:${index + 1}`;
+  state.rawLimit = RAW_PAGE_SIZE;
+  renderRaw();
+  requestAnimationFrame(() => {
+    const target = document.getElementById(`raw-event-${index}`);
+    if (!target) return;
+    target.open = true;
+    target.classList.add('raw-event-target');
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setTimeout(() => target.classList.remove('raw-event-target'), 1800);
+  });
+}
+
+function jumpRawInput(value) {
+  const text = String(value || '').trim();
+  if (!text) return;
+  const eventNumber = /^#?\d+$/.test(text) ? Number(text.replace('#', '')) : NaN;
+  if (Number.isInteger(eventNumber) && eventNumber > 0) {
+    jumpToRawEvent(eventNumber - 1);
+    return;
+  }
+  filterRawByCallId(text);
+}
+
 function renderRawEvent(item, open) {
   const { event, index, role, sender, label, preview } = item;
+  const payload = event.payload || {};
   const timestamp = fmtDate(event.timestamp) || event.timestamp || '';
   const json = JSON.stringify(event, null, 2);
   const senderClass = safeClass(sender.id);
   return `
-    <details class="raw-event raw-sender-${senderClass}" ${open ? 'open' : ''}>
+    <details class="raw-event raw-sender-${senderClass}" id="raw-event-${escapeHtml(index)}" data-raw-index="${escapeHtml(index)}" ${open ? 'open' : ''}>
       <summary class="raw-event-head">
         <span class="raw-event-main">
           <span class="raw-index">#${escapeHtml(index + 1)}</span>
@@ -977,6 +1702,12 @@ function renderRawEvent(item, open) {
       </summary>
       <div class="raw-event-detail">
         ${renderRawMeta(event, role)}
+        <div class="raw-actions">
+          <button type="button" data-copy-raw="${escapeHtml(index)}">Copy JSON</button>
+          ${payload.call_id ? `<button type="button" data-copy-call-id="${escapeHtml(index)}">Copy call_id</button>` : ''}
+          ${payload.call_id ? `<button type="button" data-related-call-id="${escapeHtml(payload.call_id)}">Related call</button>` : ''}
+          <button type="button" data-raw-expand>Expand full</button>
+        </div>
         <pre class="code json raw-json">${highlightJson(json)}</pre>
       </div>
     </details>
@@ -1090,9 +1821,11 @@ function openEventSource(id) {
 
   es.addEventListener('entries', event => {
     const entries = JSON.parse(event.data);
+    const startIndex = state.events.length;
     state.events.push(...entries);
-    appendConversationItems(entries.flatMap(entryToConversationItems));
-    const timelineEntries = entries.map(entry => ({
+    appendConversationItems(entries.flatMap((entry, offset) => entryToConversationItems(entry, startIndex + offset)));
+    const timelineEntries = entries.map((entry, offset) => ({
+      index: startIndex + offset,
       timestamp: entry.timestamp || '',
       type: entry.type,
       role: entry.payload?.role || entry.payload?.type || entry.type,
@@ -1150,13 +1883,13 @@ function previewEvent(event) {
   return '';
 }
 
-function entryToConversationItems(entry) {
+function entryToConversationItems(entry, index = state.events.length) {
   const payload = entry.payload || {};
   if (entry.type === 'event_msg' && (payload.type === 'user_message' || payload.type === 'agent_message')) {
     const text = previewEvent(entry);
     if (!text || isEnvironmentContext(text)) return [];
     return [{
-      id: `${state.events.length}-${entry.timestamp || ''}`,
+      id: `${index}-${entry.timestamp || ''}`,
       timestamp: entry.timestamp || '',
       kind: 'message',
       role: payload.type === 'user_message' ? 'user' : 'assistant',
@@ -1169,7 +1902,7 @@ function entryToConversationItems(entry) {
     const text = previewEvent(entry);
     if (!text || isEnvironmentContext(text)) return [];
     return [{
-      id: `${state.events.length}-${entry.timestamp || ''}`,
+      id: `${index}-${entry.timestamp || ''}`,
       timestamp: entry.timestamp || '',
       kind: 'message',
       role: payload.role || 'message',
@@ -1180,7 +1913,7 @@ function entryToConversationItems(entry) {
   if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
     const isCustom = payload.type === 'custom_tool_call';
     return [{
-      id: `${state.events.length}-${payload.call_id || entry.timestamp || ''}`,
+      id: `${index}-${payload.call_id || entry.timestamp || ''}`,
       timestamp: entry.timestamp || '',
       kind: 'tool',
       role: 'tool',
@@ -1192,7 +1925,7 @@ function entryToConversationItems(entry) {
   }
   if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
     return [{
-      id: `${state.events.length}-${payload.call_id || entry.timestamp || ''}`,
+      id: `${index}-${payload.call_id || entry.timestamp || ''}`,
       timestamp: entry.timestamp || '',
       kind: 'tool-result',
       role: 'tool-result',
@@ -1227,32 +1960,255 @@ function textContent(content) {
   return content.map(item => item?.text || item?.input_text || item?.output_text || '').filter(Boolean).join('\n');
 }
 
+function saveTabScroll() {
+  state.tabScroll[state.tab] = els.detail.scrollTop;
+}
+
+function switchTab(nextTab) {
+  if (!nextTab || nextTab === state.tab) return;
+  saveTabScroll();
+  state.tab = nextTab;
+  document.querySelectorAll('.tab').forEach(tab => {
+    const active = tab.dataset.tab === state.tab;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  els.conversationTab.classList.toggle('hidden', state.tab !== 'conversation');
+  els.timelineTab.classList.toggle('hidden', state.tab !== 'timeline');
+  els.lastResponseTab.classList.toggle('hidden', state.tab !== 'last-response');
+  els.rawTab.classList.toggle('hidden', state.tab !== 'raw');
+  requestAnimationFrame(() => {
+    els.detail.scrollTop = state.tabScroll[state.tab] || 0;
+    updateBackToTop();
+  });
+}
+
 els.sessions.addEventListener('click', event => {
+  if (event.target.closest('[data-clear-session-filter]')) {
+    clearSessionFilter();
+    return;
+  }
   const button = event.target.closest('.session');
   if (button) selectSession(button.dataset.id).catch(showError);
 });
 
-els.refresh.addEventListener('click', () => loadSessions().catch(showError));
-els.conversationFilter.addEventListener('input', renderConversation);
+els.sessionFilterNote.addEventListener('click', event => {
+  if (event.target.closest('[data-clear-session-filter]')) clearSessionFilter();
+});
+els.sessionFilter.addEventListener('input', renderSessions);
+els.sessionClear.addEventListener('click', clearSessionFilter);
+els.refresh.addEventListener('click', refreshSessions);
+els.detail.addEventListener('scroll', updateBackToTop);
+window.addEventListener('scroll', updateBackToTop, { passive: true });
+els.backToTop.addEventListener('click', scrollDetailToTop);
+els.conversationFilter.addEventListener('input', () => {
+  state.conversationMatchIndex = 0;
+  renderConversation();
+});
+els.conversationPrevMatch.addEventListener('click', () => moveConversationMatch(-1));
+els.conversationNextMatch.addEventListener('click', () => moveConversationMatch(1));
+els.conversationExpandFailed.addEventListener('click', openFailedTools);
 els.conversationTools.addEventListener('change', renderConversation);
 els.conversationInstructions.addEventListener('change', renderConversation);
 els.conversationCollapse.addEventListener('change', renderConversation);
-els.rawFilter.addEventListener('input', renderRaw);
+els.timelineFilter.addEventListener('input', () => {
+  state.timelineQuery = els.timelineFilter.value;
+  renderTimeline();
+});
+els.timelineKindFilter.addEventListener('change', () => {
+  state.timelineKind = els.timelineKindFilter.value || 'all';
+  renderTimeline();
+});
+els.timelineTab.addEventListener('click', event => {
+  const kindButton = event.target.closest('[data-timeline-kind]');
+  if (kindButton) {
+    state.timelineKind = kindButton.dataset.timelineKind || 'all';
+    renderTimeline();
+    return;
+  }
+  const conversationButton = event.target.closest('[data-jump-conversation]');
+  if (conversationButton && conversationButton.dataset.jumpConversation) {
+    jumpToConversationKey(conversationButton.dataset.jumpConversation);
+    return;
+  }
+  const rawButton = event.target.closest('[data-jump-raw]');
+  if (rawButton) {
+    jumpToRawEvent(Number(rawButton.dataset.jumpRaw));
+    return;
+  }
+  const callButton = event.target.closest('[data-raw-call-id]');
+  if (callButton) {
+    switchTab('raw');
+    filterRawByCallId(callButton.dataset.rawCallId);
+  }
+});
+els.rawFilter.addEventListener('input', () => {
+  state.rawLimit = RAW_PAGE_SIZE;
+  renderRaw();
+});
+els.rawBuilder.addEventListener('change', event => {
+  const select = event.target.closest('[data-raw-build-field]');
+  if (select) setRawFilterField(select.dataset.rawBuildField, select.value);
+});
+els.rawBuilder.addEventListener('click', event => {
+  if (event.target.closest('[data-raw-jump]')) {
+    jumpRawInput(document.getElementById('raw-jump-input')?.value || '');
+  }
+});
+els.rawSummary.addEventListener('click', event => {
+  const filterButton = event.target.closest('[data-raw-filter]');
+  if (filterButton) {
+    toggleRawFilterToken(filterButton.dataset.rawFilter);
+    return;
+  }
+  const clearButton = event.target.closest('[data-raw-clear]');
+  if (clearButton) {
+    els.rawFilter.value = '';
+    state.rawLimit = RAW_PAGE_SIZE;
+    renderRaw();
+  }
+});
+els.raw.addEventListener('click', event => {
+  const copyRawButton = event.target.closest('[data-copy-raw]');
+  if (copyRawButton) {
+    const rawEvent = state.events[Number(copyRawButton.dataset.copyRaw)];
+    if (rawEvent) {
+      copyText(JSON.stringify(rawEvent, null, 2)).then(() => showButtonFeedback(copyRawButton, 'Copied'));
+    }
+    return;
+  }
+  const copyCallIdButton = event.target.closest('[data-copy-call-id]');
+  if (copyCallIdButton) {
+    const rawEvent = state.events[Number(copyCallIdButton.dataset.copyCallId)];
+    const callId = rawEvent?.payload?.call_id;
+    if (callId) {
+      copyText(callId).then(() => showButtonFeedback(copyCallIdButton, 'Copied'));
+    }
+    return;
+  }
+  const relatedCallButton = event.target.closest('[data-related-call-id]');
+  if (relatedCallButton) {
+    filterRawByCallId(relatedCallButton.dataset.relatedCallId);
+    return;
+  }
+  const expandButton = event.target.closest('[data-raw-expand]');
+  if (expandButton) {
+    const card = expandButton.closest('.raw-event');
+    const expanded = !card.classList.contains('raw-expanded');
+    card.classList.toggle('raw-expanded', expanded);
+    expandButton.textContent = expanded ? 'Collapse JSON' : 'Expand full';
+    return;
+  }
+  if (!event.target.closest('[data-raw-more]')) return;
+  state.rawLimit += RAW_PAGE_SIZE;
+  renderRaw();
+});
+
+els.lastResponseTab.addEventListener('click', event => {
+  const copyButton = event.target.closest('[data-copy-last-response]');
+  if (copyButton) {
+    const text = splitAppDirectives(state.summary?.lastResponse?.preview || '').text;
+    copyText(text).then(() => showButtonFeedback(copyButton, 'Copied'));
+    return;
+  }
+  if (event.target.closest('[data-jump-last-response]')) {
+    jumpToLastResponse();
+  }
+});
 
 document.querySelectorAll('.tab').forEach(button => {
   button.addEventListener('click', () => {
-    state.tab = button.dataset.tab;
-    document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab === button));
-    els.conversationTab.classList.toggle('hidden', state.tab !== 'conversation');
-    els.timelineTab.classList.toggle('hidden', state.tab !== 'timeline');
-    els.lastResponseTab.classList.toggle('hidden', state.tab !== 'last-response');
-    els.rawTab.classList.toggle('hidden', state.tab !== 'raw');
+    switchTab(button.dataset.tab);
   });
 });
 
 function showError(err) {
   console.error(err);
   els.codexHome.textContent = err.message;
+}
+
+function clearSessionFilter() {
+  els.sessionFilter.value = '';
+  renderSessions();
+  els.sessionFilter.focus();
+}
+
+async function refreshSessions() {
+  const previousText = els.refresh.textContent;
+  els.refresh.disabled = true;
+  els.refresh.textContent = 'Refreshing...';
+  els.refreshStatus.textContent = 'Updating';
+  try {
+    await loadSessions({ refreshSelected: true });
+    els.refreshStatus.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    els.refreshStatus.textContent = 'Refresh failed';
+    showError(err);
+  } finally {
+    els.refresh.disabled = false;
+    els.refresh.textContent = previousText;
+  }
+}
+
+function openFailedTools() {
+  const failed = els.conversation.querySelectorAll('details.tool-fail, details.tool-result.tool-fail');
+  failed.forEach(detail => {
+    detail.open = true;
+  });
+  els.conversationExpandFailed.textContent = failed.length
+    ? `Opened ${formatNumber(failed.length)} failed`
+    : 'No failed tools';
+  setTimeout(() => {
+    els.conversationExpandFailed.textContent = 'Open failed tools';
+  }, 1200);
+}
+
+function jumpToConversationKey(key) {
+  if (!key) return;
+  els.conversationFilter.value = '';
+  els.conversationTools.checked = true;
+  els.conversationInstructions.checked = true;
+  state.conversationMatchIndex = 0;
+  switchTab('conversation');
+  renderConversation();
+  requestAnimationFrame(() => {
+    const target = document.getElementById(`conversation-${key}`);
+    if (!target) return;
+    if (target.tagName.toLowerCase() === 'details') target.open = true;
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    target.classList.add('conversation-target');
+    setTimeout(() => target.classList.remove('conversation-target'), 1800);
+  });
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(String(text ?? ''));
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = String(text ?? '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  textarea.remove();
+}
+
+function showButtonFeedback(button, label) {
+  const previous = button.textContent;
+  button.textContent = label;
+  button.disabled = true;
+  setTimeout(() => {
+    button.textContent = previous;
+    button.disabled = false;
+  }, 1000);
+}
+
+function jumpToLastResponse() {
+  const key = lastResponseConversationKey();
+  jumpToConversationKey(key);
 }
 
 await loadHealth().catch(showError);
